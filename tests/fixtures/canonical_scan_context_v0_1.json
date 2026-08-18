@@ -8,10 +8,9 @@
     "baseline_revision": 0,
     "baseline_state": "EMPTY",
     "regions": ["CN", "TW", "US", "GLOBAL"],
-    "requested_mode": "FULL_SCAN",
-    "protocol_version": "0.1",
-    "benefit_schema_version": "1.2.1"
+    "requested_mode": "FULL_SCAN"
   },
+
   "benefit_index": [],
   "review_items": [],
   "open_leads": [],

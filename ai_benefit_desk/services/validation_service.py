@@ -1,12 +1,17 @@
 from datetime import date
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
+from pydantic import ValidationError
 from ai_benefit_desk.config import PROTOCOL_VERSION, BENEFIT_SCHEMA_VERSION
 from ai_benefit_desk.db.models import (
     BenefitModel, LeadModel, CanonicalSourceModel, CoverageHistoryModel, ScanModel, SystemStateModel
 )
-from ai_benefit_desk.schemas.protocol_models import ScanImportPackage, BenefitChangeOperation, LeadChangeOperation
+from ai_benefit_desk.schemas.benefit_models import BenefitRecord
+from ai_benefit_desk.schemas.protocol_models import (
+    ScanImportPackage, BenefitChangeOperation, LeadChangeOperation, LeadRecord, CanonicalSourceItem
+)
 from ai_benefit_desk.utils.date_utils import is_review_due
+
 
 class ValidationResult:
     def __init__(self):
@@ -91,6 +96,13 @@ class ValidationService:
         today = date.today()
 
         for cov in import_pkg.coverage_events:
+            # Permanent ID ownership check
+            if cov.coverage_id is not None:
+                result.add_error(f"Coverage Event 不能由外部指定 coverage_id，由 Benefit Desk 分配。(提供了: {cov.coverage_id})")
+            if cov.scan_id and cov.scan_id != import_pkg.scan_result.scan_id:
+                result.add_error(f"Coverage Event 的 scan_id ({cov.scan_id}) 与扫描批次 scan_id ({import_pkg.scan_result.scan_id}) 不一致。")
+
+
             # Cross-reference check: source_id
             if cov.source_id:
                 s_exist = db.query(CanonicalSourceModel).filter_by(source_id=cov.source_id).first()
@@ -170,7 +182,6 @@ class ValidationService:
                     continue
 
 
-
         # 6. Global Local Ref Uniqueness & Benefit Operations Validation
         global_local_refs = set()
         created_benefit_refs = set()
@@ -194,7 +205,7 @@ class ValidationService:
                     result.add_error(f"Benefit CREATE 操作必须包含 record 对象: {bop.local_ref}")
                 else:
                     if bop.record.benefit_id is not None:
-                        result.add_error(f"Benefit CREATE 操作的 record.benefit_id 必须为 null，不能指定为: {bop.record.benefit_id}")
+                        result.add_error(f"Benefit CREATE 操作的 record.benefit_id 必须为 null，由 Benefit Desk 分配。(提供了: {bop.record.benefit_id})")
                     
                     # Evidence Gate check
                     rec = bop.record
@@ -224,30 +235,84 @@ class ValidationService:
                     existing = db.query(BenefitModel).filter_by(benefit_id=bop.benefit_id).first()
                     if not existing:
                         result.add_error(f"Benefit UPDATE 指定的 benefit_id 不存在: {bop.benefit_id}")
-                    
-                if bop.patch is None or not isinstance(bop.patch, dict):
-                    result.add_error(f"Benefit UPDATE 操作必须提供 patch 字典 (benefit_id: {bop.benefit_id})")
-                else:
-                    if "benefit_id" in bop.patch:
-                        result.add_error("Benefit UPDATE patch 禁止修改 benefit_id")
-                    
-                    # If patch changes status to CONFIRMED
-                    if bop.patch.get("verification_status") == "CONFIRMED":
-                        patch_s_level = bop.patch.get("source_level")
-                        has_sa = (
-                            patch_s_level in ("S", "A") or
-                            any(e.source_level in ("S", "A") for e in bop.evidence)
-                        )
-                        if not has_sa:
-                            gate_msg = f"确认级别与证据不匹配: 更新福利 [{bop.benefit_id}] 状态为 CONFIRMED，但缺乏 S 或 A 级第一方证据"
-                            result.evidence_gate_failures.append({
-                                "benefit_id": bop.benefit_id,
-                                "message": gate_msg
-                            })
-                            if not user_override_evidence:
-                                result.add_error(gate_msg)
-                            else:
-                                result.add_warning("EVIDENCE_MISMATCH", f"{gate_msg} (已人工覆盖)", bop.benefit_id)
+                    else:
+                        if bop.patch is None or not isinstance(bop.patch, dict):
+                            result.add_error(f"Benefit UPDATE 操作必须提供 patch 字典 (benefit_id: {bop.benefit_id})")
+                        else:
+                            if "benefit_id" in bop.patch:
+                                result.add_error(f"Benefit UPDATE patch 禁止修改 benefit_id (benefit_id: {bop.benefit_id})")
+                            
+                            for f_key in ("coverage_state", "scan_id", "user_action_state", "lead_id", "source_id"):
+                                if f_key in bop.patch:
+                                    result.add_error(f"Benefit UPDATE patch 包含非法外来字段: {f_key} (benefit_id: {bop.benefit_id})")
+
+                            existing_dict = {
+                                "benefit_id": existing.benefit_id,
+                                "vendor": existing.vendor,
+                                "product": existing.product,
+                                "linked_vendor": existing.linked_vendor or "UNKNOWN",
+                                "linked_product": existing.linked_product or "UNKNOWN",
+                                "campaign_name": existing.campaign_name,
+                                "benefit_type": existing.benefit_type,
+                                "benefit_detail": existing.benefit_detail,
+                                "linked_benefit_detail": existing.linked_benefit_detail or "UNKNOWN",
+                                "wallet": existing.wallet or "UNKNOWN",
+                                "amount": existing.amount or "UNKNOWN",
+                                "unit": existing.unit or "UNKNOWN",
+                                "reset_policy": existing.reset_policy or "UNKNOWN",
+                                "grant_method": existing.grant_method or "UNKNOWN",
+                                "regions": existing.regions,
+                                "eligibility": existing.eligibility or "UNKNOWN",
+                                "eligibility_class": existing.eligibility_class,
+                                "start_date": existing.start_date or "UNKNOWN",
+                                "end_date": existing.end_date or "UNKNOWN",
+                                "first_seen": existing.first_seen,
+                                "last_checked": existing.last_checked,
+                                "next_review_date": existing.next_review_date or "UNKNOWN",
+                                "claim_method": existing.claim_method or "UNKNOWN",
+                                "credit_card_required": existing.credit_card_required or "UNKNOWN",
+                                "verification_required": existing.verification_required or "UNKNOWN",
+                                "official_source": existing.official_source,
+                                "source_level": existing.source_level,
+                                "verification_status": existing.verification_status,
+                                "status": existing.status,
+                                "change_type": bop.change_type or existing.change_type or "UNKNOWN",
+                                "account_risk": existing.account_risk or "NONE",
+                                "region_risk": existing.region_risk or "UNKNOWN",
+                                "compliance_risk": existing.compliance_risk or "NONE",
+                                "notes": existing.notes or ""
+                            }
+                            candidate_dict = existing_dict.copy()
+                            candidate_dict.update(bop.patch)
+                            if bop.change_type:
+                                candidate_dict["change_type"] = bop.change_type
+
+                            try:
+                                BenefitRecord.model_validate(candidate_dict)
+                            except ValidationError as ve:
+                                for err in ve.errors():
+                                    loc = ".".join(str(l) for l in err.get("loc", []))
+                                    result.add_error(f"Benefit UPDATE patch 导致记录不符合 Schema 规范 ({loc}): {err.get('msg')} (benefit_id: {bop.benefit_id})")
+                            except Exception as e:
+                                result.add_error(f"Benefit UPDATE patch 校验失败: {str(e)} (benefit_id: {bop.benefit_id})")
+
+                            # If patch changes or sets status to CONFIRMED
+                            if candidate_dict.get("verification_status") == "CONFIRMED":
+                                patch_s_level = candidate_dict.get("source_level")
+                                has_sa = (
+                                    patch_s_level in ("S", "A") or
+                                    any(e.source_level in ("S", "A") for e in bop.evidence)
+                                )
+                                if not has_sa:
+                                    gate_msg = f"确认级别与证据不匹配: 更新福利 [{bop.benefit_id}] 状态为 CONFIRMED，但缺乏 S 或 A 级第一方证据"
+                                    result.evidence_gate_failures.append({
+                                        "benefit_id": bop.benefit_id,
+                                        "message": gate_msg
+                                    })
+                                    if not user_override_evidence:
+                                        result.add_error(gate_msg)
+                                    else:
+                                        result.add_warning("EVIDENCE_MISMATCH", f"{gate_msg} (已人工覆盖)", bop.benefit_id)
 
             elif bop.operation == "CONFIRM_NO_CHANGE":
                 if not bop.benefit_id:
@@ -263,6 +328,11 @@ class ValidationService:
                 check_local_ref(lop.local_ref, "Lead CREATE")
                 if not lop.record:
                     result.add_error(f"Lead CREATE 操作必须包含 record 对象: {lop.local_ref}")
+                else:
+                    if lop.record.lead_id is not None:
+                        result.add_error(f"新线索必须使用 local_ref，lead_id 由 Benefit Desk 分配。(提供了: {lop.record.lead_id})")
+                    if lop.record.verification_status == "CONFIRMED":
+                        result.add_error("已确认线索必须通过 RESOLVE_TO_BENEFIT 转为正式福利，不能继续保留为 CONFIRMED Lead。")
 
             elif lop.operation == "UPDATE":
                 if not lop.lead_id:
@@ -271,8 +341,42 @@ class ValidationService:
                     existing_lead = db.query(LeadModel).filter_by(lead_id=lop.lead_id).first()
                     if not existing_lead:
                         result.add_error(f"Lead UPDATE 指定的 lead_id 不存在: {lop.lead_id}")
-                if lop.patch is None or not isinstance(lop.patch, dict):
-                    result.add_error(f"Lead UPDATE 必须提供 patch 字典 (lead_id: {lop.lead_id})")
+                    else:
+                        if lop.patch is None or not isinstance(lop.patch, dict):
+                            result.add_error(f"Lead UPDATE 必须提供 patch 字典 (lead_id: {lop.lead_id})")
+                        else:
+                            if "lead_id" in lop.patch:
+                                result.add_error(f"Lead UPDATE patch 禁止修改 lead_id (lead_id: {lop.lead_id})")
+                            if lop.patch.get("verification_status") == "CONFIRMED":
+                                result.add_error(f"已确认线索必须通过 RESOLVE_TO_BENEFIT 转为正式福利，不能通过 UPDATE 改为 CONFIRMED (lead_id: {lop.lead_id})")
+
+                            existing_lead_dict = {
+                                "lead_id": existing_lead.lead_id,
+                                "vendor": existing_lead.vendor,
+                                "product": existing_lead.product,
+                                "lead_summary": existing_lead.lead_summary,
+                                "verification_status": existing_lead.verification_status,
+                                "source_level": existing_lead.source_level,
+                                "regions": existing_lead.regions,
+                                "missing_evidence": existing_lead.missing_evidence or "",
+                                "first_seen": existing_lead.first_seen,
+                                "last_checked": existing_lead.last_checked,
+                                "next_review_date": existing_lead.next_review_date or "UNKNOWN",
+                                "status": existing_lead.status,
+                                "resolved_benefit_id": existing_lead.resolved_benefit_id,
+                                "rejection_reason": existing_lead.rejection_reason
+                            }
+                            candidate_lead = existing_lead_dict.copy()
+                            candidate_lead.update(lop.patch)
+
+                            try:
+                                LeadRecord.model_validate(candidate_lead)
+                            except ValidationError as ve:
+                                for err in ve.errors():
+                                    loc = ".".join(str(l) for l in err.get("loc", []))
+                                    result.add_error(f"Lead UPDATE patch 导致记录不符合 Schema 规范 ({loc}): {err.get('msg')} (lead_id: {lop.lead_id})")
+                            except Exception as e:
+                                result.add_error(f"Lead UPDATE patch 校验失败: {str(e)} (lead_id: {lop.lead_id})")
 
             elif lop.operation == "RESOLVE_TO_BENEFIT":
                 if not lop.lead_id:
@@ -311,6 +415,9 @@ class ValidationService:
                 check_local_ref(sop.local_ref, "Source ADD")
                 if not sop.record:
                     result.add_error(f"Source ADD 必须提供 record 对象: {sop.local_ref}")
+                else:
+                    if sop.record.source_id is not None:
+                        result.add_error(f"新官方入口必须使用 local_ref，source_id 由 Benefit Desk 分配。(提供了: {sop.record.source_id})")
             elif sop.operation == "UPDATE":
                 if not sop.source_id:
                     result.add_error("Source UPDATE 必须指定 source_id")
@@ -318,8 +425,37 @@ class ValidationService:
                     s_exist = db.query(CanonicalSourceModel).filter_by(source_id=sop.source_id).first()
                     if not s_exist:
                         result.add_error(f"Source UPDATE 指定的 source_id 不存在: {sop.source_id}")
-                if sop.patch is None or not isinstance(sop.patch, dict):
-                    result.add_error(f"Source UPDATE 必须提供 patch 字典 (source_id: {sop.source_id})")
+                    else:
+                        if sop.patch is None or not isinstance(sop.patch, dict):
+                            result.add_error(f"Source UPDATE 必须提供 patch 字典 (source_id: {sop.source_id})")
+                        else:
+                            if "source_id" in sop.patch:
+                                result.add_error(f"Source UPDATE patch 禁止修改 source_id (source_id: {sop.source_id})")
+
+                            existing_src_dict = {
+                                "source_id": s_exist.source_id,
+                                "vendor": s_exist.vendor,
+                                "product": s_exist.product,
+                                "surface": s_exist.surface,
+                                "source_name": s_exist.source_name,
+                                "url": s_exist.url,
+                                "source_type": s_exist.source_type,
+                                "source_level": s_exist.source_level,
+                                "status": s_exist.status,
+                                "last_verified_at": s_exist.last_verified_at
+                            }
+                            candidate_src = existing_src_dict.copy()
+                            candidate_src.update(sop.patch)
+
+                            try:
+                                CanonicalSourceItem.model_validate(candidate_src)
+                            except ValidationError as ve:
+                                for err in ve.errors():
+                                    loc = ".".join(str(l) for l in err.get("loc", []))
+                                    result.add_error(f"Source UPDATE patch 导致记录不符合规范 ({loc}): {err.get('msg')} (source_id: {sop.source_id})")
+                            except Exception as e:
+                                result.add_error(f"Source UPDATE patch 校验失败: {str(e)} (source_id: {sop.source_id})")
+
             elif sop.operation == "DEPRECATE":
                 if not sop.source_id:
                     result.add_error("Source DEPRECATE 必须指定 source_id")
@@ -330,6 +466,7 @@ class ValidationService:
 
         # 9. Manual Check Items Validation
         for mop in import_pkg.manual_check_items:
+
             if mop.manual_check_id is not None:
                 result.add_error("新人工检查项必须使用 local_ref，manual_check_id 由 Benefit Desk 分配。")
             if not mop.local_ref:

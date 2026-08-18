@@ -1279,3 +1279,679 @@ def test_035_manual_check_cannot_supply_permanent_id(db_session):
     assert m_rec.manual_check_id.startswith("MCHK-")
     assert m_rec.manual_check_id != "MCHK-999999"
 
+# TEST-036: Benefit UPDATE merged schema validation
+def test_036_benefit_update_merged_schema_validation(db_session):
+    # Setup initial benefit
+    b = BenefitModel(
+        benefit_id="BEN-000123",
+        vendor="Anthropic",
+        product="Claude",
+        campaign_name="Claude Pro Promo",
+        benefit_type="FREE_ACCESS",
+        benefit_detail="Pro trial",
+        first_seen="2026-08-01",
+        last_checked="2026-08-01",
+        official_source="https://anthropic.com",
+        source_level="S",
+        verification_status="CONFIRMED",
+        status="ACTIVE"
+    )
+    b.regions = ["US", "GLOBAL"]
+    b.eligibility_class = ["NEW_USERS"]
+    db_session.add(b)
+    db_session.commit()
+
+    # Case A: status = "BANANA" -> FAIL
+    p_a = make_sample_import(db_session, "SCAN-20260818-036A", rev=0)
+    p_a["benefit_changes"].append({
+        "operation": "UPDATE",
+        "benefit_id": "BEN-000123",
+        "change_type": "STATUS_CHANGED",
+        "patch": {"status": "BANANA"}
+    })
+    prev_a = ImportService.parse_and_preview(db_session, dumps_json(p_a))
+    assert prev_a["is_valid"] is False
+    assert any("Schema 规范" in e or "Invalid status" in e for e in prev_a["errors"])
+
+    # Case B: end_date = "tomorrow" -> FAIL
+    p_b = make_sample_import(db_session, "SCAN-20260818-036B", rev=0)
+    p_b["benefit_changes"].append({
+        "operation": "UPDATE",
+        "benefit_id": "BEN-000123",
+        "change_type": "STATUS_CHANGED",
+        "patch": {"end_date": "tomorrow"}
+    })
+    prev_b = ImportService.parse_and_preview(db_session, dumps_json(p_b))
+    assert prev_b["is_valid"] is False
+    assert any("Invalid date format" in e for e in prev_b["errors"])
+
+    # Case C: regions = ["MARS"] -> FAIL
+    p_c = make_sample_import(db_session, "SCAN-20260818-036C", rev=0)
+    p_c["benefit_changes"].append({
+        "operation": "UPDATE",
+        "benefit_id": "BEN-000123",
+        "change_type": "STATUS_CHANGED",
+        "patch": {"regions": ["MARS"]}
+    })
+    prev_c = ImportService.parse_and_preview(db_session, dumps_json(p_c))
+    assert prev_c["is_valid"] is False
+    assert any("Invalid region" in e for e in prev_c["errors"])
+
+    # Case D: coverage_state = "CHECKED_FOUND" in patch -> FAIL
+    p_d = make_sample_import(db_session, "SCAN-20260818-036D", rev=0)
+    p_d["benefit_changes"].append({
+        "operation": "UPDATE",
+        "benefit_id": "BEN-000123",
+        "change_type": "STATUS_CHANGED",
+        "patch": {"coverage_state": "CHECKED_FOUND"}
+    })
+    prev_d = ImportService.parse_and_preview(db_session, dumps_json(p_d))
+    assert prev_d["is_valid"] is False
+    assert any("非法外来字段" in e or "extra fields not permitted" in e for e in prev_d["errors"])
+
+    # Case E: Valid patch status = ENDED, end_date = 2026-08-31 -> PASS
+    p_e = make_sample_import(db_session, "SCAN-20260818-036E", rev=0)
+    p_e["benefit_changes"].append({
+        "operation": "UPDATE",
+        "benefit_id": "BEN-000123",
+        "change_type": "ENDED",
+        "patch": {"status": "ENDED", "end_date": "2026-08-31"}
+    })
+    raw_e = dumps_json(p_e)
+    prev_e = ImportService.parse_and_preview(db_session, raw_e)
+    assert prev_e["is_valid"] is True
+    commit_e = ImportService.commit_import(db_session, prev_e["import_pkg"], raw_e)
+    assert commit_e["success"] is True
+
+    # Verify updated fields and unmodified fields in DB
+    updated_b = db_session.query(BenefitModel).filter_by(benefit_id="BEN-000123").first()
+    assert updated_b.status == "ENDED"
+    assert updated_b.end_date == "2026-08-31"
+    assert updated_b.campaign_name == "Claude Pro Promo"
+    assert updated_b.vendor == "Anthropic"
+    assert updated_b.regions == ["US", "GLOBAL"]
+
+# TEST-037: Lead UPDATE validation
+def test_037_lead_update_validation(db_session):
+    lead = LeadModel(
+        lead_id="LEAD-000123",
+        vendor="Mistral",
+        product="Le Chat",
+        lead_summary="Mistral Free trial",
+        verification_status="UNVERIFIED",
+        source_level="B",
+        first_seen="2026-08-01",
+        last_checked="2026-08-01",
+        status="OPEN"
+    )
+    lead.regions = ["GLOBAL"]
+    db_session.add(lead)
+    db_session.commit()
+
+    # Case A: verification_status = "CONFIRMED" -> FAIL
+    p_a = make_sample_import(db_session, "SCAN-20260818-037A", rev=0)
+    p_a["lead_changes"].append({
+        "operation": "UPDATE",
+        "lead_id": "LEAD-000123",
+        "patch": {"verification_status": "CONFIRMED"}
+    })
+    prev_a = ImportService.parse_and_preview(db_session, dumps_json(p_a))
+    assert prev_a["is_valid"] is False
+    assert any("RESOLVE_TO_BENEFIT" in e for e in prev_a["errors"])
+
+    # Case B: invalid region in patch -> FAIL
+    p_b = make_sample_import(db_session, "SCAN-20260818-037B", rev=0)
+    p_b["lead_changes"].append({
+        "operation": "UPDATE",
+        "lead_id": "LEAD-000123",
+        "patch": {"regions": ["MARS"]}
+    })
+    prev_b = ImportService.parse_and_preview(db_session, dumps_json(p_b))
+    assert prev_b["is_valid"] is False
+    assert any("Invalid region" in e for e in prev_b["errors"])
+
+    # Case C: unknown field -> FAIL
+    p_c = make_sample_import(db_session, "SCAN-20260818-037C", rev=0)
+    p_c["lead_changes"].append({
+        "operation": "UPDATE",
+        "lead_id": "LEAD-000123",
+        "patch": {"extra_invalid_field": "123"}
+    })
+    prev_c = ImportService.parse_and_preview(db_session, dumps_json(p_c))
+    assert prev_c["is_valid"] is False
+
+    # Case D: attempt to patch lead_id -> FAIL
+    p_d = make_sample_import(db_session, "SCAN-20260818-037D", rev=0)
+    p_d["lead_changes"].append({
+        "operation": "UPDATE",
+        "lead_id": "LEAD-000123",
+        "patch": {"lead_id": "LEAD-999999"}
+    })
+    prev_d = ImportService.parse_and_preview(db_session, dumps_json(p_d))
+    assert prev_d["is_valid"] is False
+    assert any("禁止修改 lead_id" in e for e in prev_d["errors"])
+
+    # Case E: Valid LIKELY -> DISPUTED update -> PASS
+    p_e = make_sample_import(db_session, "SCAN-20260818-037E", rev=0)
+    p_e["lead_changes"].append({
+        "operation": "UPDATE",
+        "lead_id": "LEAD-000123",
+        "patch": {"verification_status": "DISPUTED", "lead_summary": "Disputed deal"}
+    })
+    raw_e = dumps_json(p_e)
+    prev_e = ImportService.parse_and_preview(db_session, raw_e)
+    assert prev_e["is_valid"] is True
+    commit_e = ImportService.commit_import(db_session, prev_e["import_pkg"], raw_e)
+    assert commit_e["success"] is True
+    updated_lead = db_session.query(LeadModel).filter_by(lead_id="LEAD-000123").first()
+    assert updated_lead.verification_status == "DISPUTED"
+    assert updated_lead.lead_summary == "Disputed deal"
+
+# TEST-038: Source UPDATE validation
+def test_038_source_update_validation(db_session):
+    src = CanonicalSourceModel(
+        source_id="SRC-000123",
+        vendor="Anthropic",
+        product="Claude",
+        surface="PRICING",
+        source_name="Anthropic Pricing Page",
+        url="https://anthropic.com/pricing",
+        source_type="OFFICIAL_PAGE",
+        source_level="S",
+        status="ACTIVE",
+        last_verified_at="2026-08-01T10:00:00+08:00"
+    )
+    db_session.add(src)
+    db_session.commit()
+
+    # Case A: source_level = "Z" -> FAIL
+    p_a = make_sample_import(db_session, "SCAN-20260818-038A", rev=0)
+    p_a["source_updates"].append({
+        "operation": "UPDATE",
+        "source_id": "SRC-000123",
+        "patch": {"source_level": "Z"}
+    })
+    prev_a = ImportService.parse_and_preview(db_session, dumps_json(p_a))
+    assert prev_a["is_valid"] is False
+    assert any("Invalid source_level" in e for e in prev_a["errors"])
+
+    # Case B: non-timezone last_verified_at -> FAIL
+    p_b = make_sample_import(db_session, "SCAN-20260818-038B", rev=0)
+    p_b["source_updates"].append({
+        "operation": "UPDATE",
+        "source_id": "SRC-000123",
+        "patch": {"last_verified_at": "2026-08-18"}
+    })
+    prev_b = ImportService.parse_and_preview(db_session, dumps_json(p_b))
+    assert prev_b["is_valid"] is False
+    assert any("timezone-aware" in e for e in prev_b["errors"])
+
+    # Case C: unknown field -> FAIL
+    p_c = make_sample_import(db_session, "SCAN-20260818-038C", rev=0)
+    p_c["source_updates"].append({
+        "operation": "UPDATE",
+        "source_id": "SRC-000123",
+        "patch": {"unknown_prop": "test"}
+    })
+    prev_c = ImportService.parse_and_preview(db_session, dumps_json(p_c))
+    assert prev_c["is_valid"] is False
+
+    # Case D: source_id patch -> FAIL
+    p_d = make_sample_import(db_session, "SCAN-20260818-038D", rev=0)
+    p_d["source_updates"].append({
+        "operation": "UPDATE",
+        "source_id": "SRC-000123",
+        "patch": {"source_id": "SRC-999999"}
+    })
+    prev_d = ImportService.parse_and_preview(db_session, dumps_json(p_d))
+    assert prev_d["is_valid"] is False
+    assert any("禁止修改 source_id" in e for e in prev_d["errors"])
+
+    # Case E: Valid timezone-aware update -> PASS
+    p_e = make_sample_import(db_session, "SCAN-20260818-038E", rev=0)
+    p_e["source_updates"].append({
+        "operation": "UPDATE",
+        "source_id": "SRC-000123",
+        "patch": {"last_verified_at": "2026-08-18T19:30:00+08:00"}
+    })
+    raw_e = dumps_json(p_e)
+    prev_e = ImportService.parse_and_preview(db_session, raw_e)
+    assert prev_e["is_valid"] is True
+    commit_e = ImportService.commit_import(db_session, prev_e["import_pkg"], raw_e)
+    assert commit_e["success"] is True
+    updated_src = db_session.query(CanonicalSourceModel).filter_by(source_id="SRC-000123").first()
+    assert updated_src.last_verified_at == "2026-08-18T19:30:00+08:00"
+
+# TEST-039: Lead cannot remain CONFIRMED
+def test_039_lead_cannot_remain_confirmed(db_session):
+    # Case A: Lead CREATE with CONFIRMED -> FAIL
+    p_a = make_sample_import(db_session, "SCAN-20260818-039A", rev=0)
+    p_a["lead_changes"].append({
+        "operation": "CREATE",
+        "local_ref": "LNEW-001",
+        "record": {
+            "vendor": "Meta",
+            "product": "Llama",
+            "lead_summary": "Meta Free Credits",
+            "verification_status": "CONFIRMED",
+            "source_level": "S",
+            "first_seen": "2026-08-18",
+            "last_checked": "2026-08-18",
+            "status": "OPEN"
+        }
+    })
+    prev_a = ImportService.parse_and_preview(db_session, dumps_json(p_a))
+    assert prev_a["is_valid"] is False
+    assert any("RESOLVE_TO_BENEFIT" in e for e in prev_a["errors"])
+
+    # Case B: Lead UPDATE with CONFIRMED -> FAIL
+    lead = LeadModel(
+        lead_id="LEAD-00039",
+        vendor="Meta",
+        product="Llama",
+        lead_summary="Meta Free Credits",
+        verification_status="UNVERIFIED",
+        source_level="B",
+        first_seen="2026-08-18",
+        last_checked="2026-08-18",
+        status="OPEN"
+    )
+    lead.regions = ["GLOBAL"]
+    db_session.add(lead)
+    db_session.commit()
+
+    p_b = make_sample_import(db_session, "SCAN-20260818-039B", rev=0)
+    p_b["lead_changes"].append({
+        "operation": "UPDATE",
+        "lead_id": "LEAD-00039",
+        "patch": {"verification_status": "CONFIRMED"}
+    })
+    prev_b = ImportService.parse_and_preview(db_session, dumps_json(p_b))
+    assert prev_b["is_valid"] is False
+    assert any("RESOLVE_TO_BENEFIT" in e for e in prev_b["errors"])
+
+    # Case C: UNVERIFIED Lead + Benefit CREATE + RESOLVE_TO_BENEFIT -> PASS
+    p_c = make_sample_import(db_session, "SCAN-20260818-039C", rev=0)
+    p_c["benefit_changes"].append({
+        "operation": "CREATE",
+        "local_ref": "BNEW-039",
+        "record": {
+            "vendor": "Meta",
+            "product": "Llama",
+            "campaign_name": "Llama API Credits",
+            "benefit_type": "API_CREDITS",
+            "benefit_detail": "$50 Credits",
+            "first_seen": "2026-08-18",
+            "last_checked": "2026-08-18",
+            "official_source": "https://meta.com/llama",
+            "source_level": "S",
+            "verification_status": "CONFIRMED",
+            "status": "ACTIVE"
+        }
+    })
+    p_c["lead_changes"].append({
+        "operation": "RESOLVE_TO_BENEFIT",
+        "lead_id": "LEAD-00039",
+        "target_benefit_ref": "BNEW-039"
+    })
+    raw_c = dumps_json(p_c)
+    prev_c = ImportService.parse_and_preview(db_session, raw_c)
+    assert prev_c["is_valid"] is True
+    commit_c = ImportService.commit_import(db_session, prev_c["import_pkg"], raw_c)
+    assert commit_c["success"] is True
+
+    resolved_lead = db_session.query(LeadModel).filter_by(lead_id="LEAD-00039").first()
+    assert resolved_lead.status == "RESOLVED"
+    assert resolved_lead.resolved_benefit_id.startswith("BEN-")
+
+# TEST-040: Permanent ID ownership
+def test_040_permanent_id_ownership(db_session):
+    # Case A: Lead CREATE with permanent lead_id -> FAIL
+    p_a = make_sample_import(db_session, "SCAN-20260818-040A", rev=0)
+    p_a["lead_changes"].append({
+        "operation": "CREATE",
+        "local_ref": "LNEW-001",
+        "record": {
+            "lead_id": "LEAD-999999",
+            "vendor": "OpenAI",
+            "product": "ChatGPT",
+            "lead_summary": "Test Lead",
+            "verification_status": "LIKELY",
+            "source_level": "A",
+            "first_seen": "2026-08-18",
+            "last_checked": "2026-08-18",
+            "status": "OPEN"
+        }
+    })
+    prev_a = ImportService.parse_and_preview(db_session, dumps_json(p_a))
+    assert prev_a["is_valid"] is False
+    assert any("lead_id 由 Benefit Desk 分配" in e for e in prev_a["errors"])
+
+    # Case B: Source ADD with permanent source_id -> FAIL
+    p_b = make_sample_import(db_session, "SCAN-20260818-040B", rev=0)
+    p_b["source_updates"].append({
+        "operation": "ADD",
+        "local_ref": "SNEW-001",
+        "record": {
+            "source_id": "SRC-999999",
+            "vendor": "OpenAI",
+            "product": "ChatGPT",
+            "surface": "PRICING",
+            "source_name": "OpenAI Pricing",
+            "url": "https://openai.com/pricing",
+            "source_type": "OFFICIAL_PAGE",
+            "source_level": "S",
+            "status": "ACTIVE"
+        }
+    })
+    prev_b = ImportService.parse_and_preview(db_session, dumps_json(p_b))
+    assert prev_b["is_valid"] is False
+    assert any("source_id 由 Benefit Desk 分配" in e for e in prev_b["errors"])
+
+    # Case C: Coverage Event with coverage_id -> FAIL
+    p_c = make_sample_import(db_session, "SCAN-20260818-040C", rev=0)
+    p_c["coverage_events"].append({
+        "coverage_id": "COV-999999",
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "surface": "PRICING",
+        "region": "GLOBAL",
+        "coverage_state": "CHECKED_NONE",
+        "scan_observed_at": "2026-08-18T18:00:00+08:00",
+        "actual_checked_at": "2026-08-18T18:00:00+08:00"
+    })
+    prev_c = ImportService.parse_and_preview(db_session, dumps_json(p_c))
+    assert prev_c["is_valid"] is False
+    assert any("Coverage Event 不能由外部指定 coverage_id" in e for e in prev_c["errors"])
+
+
+
+    # Case D: Coverage Event with mismatched scan_id -> FAIL
+    p_d = make_sample_import(db_session, "SCAN-20260818-040D", rev=0)
+    p_d["coverage_events"].append({
+        "scan_id": "SCAN-OTHER-123",
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "surface": "PRICING",
+        "region": "GLOBAL",
+        "coverage_state": "CHECKED_NONE",
+        "scan_observed_at": "2026-08-18T18:00:00+08:00",
+        "actual_checked_at": "2026-08-18T18:00:00+08:00"
+    })
+    prev_d = ImportService.parse_and_preview(db_session, dumps_json(p_d))
+    assert prev_d["is_valid"] is False
+    assert any("与扫描批次 scan_id" in e for e in prev_d["errors"])
+
+    # Case E: Valid local_ref Lead CREATE and Source ADD -> Desk generates permanent IDs
+    p_e = make_sample_import(db_session, "SCAN-20260818-040E", rev=0)
+    p_e["lead_changes"].append({
+        "operation": "CREATE",
+        "local_ref": "LNEW-040",
+        "record": {
+            "vendor": "OpenAI",
+            "product": "ChatGPT",
+            "lead_summary": "Test Valid Lead",
+            "verification_status": "LIKELY",
+            "source_level": "A",
+            "first_seen": "2026-08-18",
+            "last_checked": "2026-08-18",
+            "status": "OPEN"
+        }
+    })
+    p_e["source_updates"].append({
+        "operation": "ADD",
+        "local_ref": "SNEW-040",
+        "record": {
+            "vendor": "OpenAI",
+            "product": "ChatGPT",
+            "surface": "PRICING",
+            "source_name": "OpenAI Pricing Valid",
+            "url": "https://openai.com/pricing",
+            "source_type": "OFFICIAL_PAGE",
+            "source_level": "S",
+            "status": "ACTIVE"
+        }
+    })
+    raw_e = dumps_json(p_e)
+    prev_e = ImportService.parse_and_preview(db_session, raw_e)
+    assert prev_e["is_valid"] is True
+    commit_e = ImportService.commit_import(db_session, prev_e["import_pkg"], raw_e)
+    assert commit_e["success"] is True
+    created_lead = db_session.query(LeadModel).filter_by(lead_summary="Test Valid Lead").first()
+    assert created_lead.lead_id.startswith("LEAD-")
+    created_src = db_session.query(CanonicalSourceModel).filter_by(source_name="OpenAI Pricing Valid").first()
+    assert created_src.source_id.startswith("SRC-")
+
+# TEST-041: UNKNOWN date review planning
+def test_041_unknown_date_review_planning(db_session):
+    # Benefit A: ACTIVE + UNKNOWN end_date + UNKNOWN next_review_date
+    ba = BenefitModel(
+        benefit_id="BEN-041A",
+        vendor="VendorA",
+        product="ProductA",
+        campaign_name="Campaign A (Active Unknown)",
+        benefit_type="FREE_MODEL",
+        benefit_detail="detail",
+        first_seen="2026-08-01",
+        last_checked="2026-08-01",
+        official_source="https://example.com/a",
+        source_level="S",
+        verification_status="CONFIRMED",
+        status="ACTIVE",
+        end_date="UNKNOWN",
+        next_review_date="UNKNOWN"
+    )
+    ba.regions = ["GLOBAL"]
+    ba.eligibility_class = ["ALL_USERS"]
+
+    # Benefit B: ACTIVE + future next_review_date + future end_date
+    bb = BenefitModel(
+        benefit_id="BEN-041B",
+        vendor="VendorB",
+        product="ProductB",
+        campaign_name="Campaign B (Active Future)",
+        benefit_type="FREE_MODEL",
+        benefit_detail="detail",
+        first_seen="2026-08-01",
+        last_checked="2026-08-01",
+        official_source="https://example.com/b",
+        source_level="S",
+        verification_status="CONFIRMED",
+        status="ACTIVE",
+        end_date="2099-01-01",
+        next_review_date="2099-01-01"
+    )
+    bb.regions = ["GLOBAL"]
+    bb.eligibility_class = ["ALL_USERS"]
+
+    # Benefit C: ENDED in past
+    bc = BenefitModel(
+        benefit_id="BEN-041C",
+        vendor="VendorC",
+        product="ProductC",
+        campaign_name="Campaign C (Ended)",
+        benefit_type="FREE_MODEL",
+        benefit_detail="detail",
+        first_seen="2020-01-01",
+        last_checked="2020-01-01",
+        official_source="https://example.com/c",
+        source_level="S",
+        verification_status="CONFIRMED",
+        status="ENDED",
+        end_date="2020-01-01",
+        next_review_date="UNKNOWN"
+    )
+    bc.regions = ["GLOBAL"]
+    bc.eligibility_class = ["ALL_USERS"]
+
+    db_session.add_all([ba, bb, bc])
+    db_session.commit()
+
+    context_pkg = ExportService.generate_scan_context(db_session, requested_mode="FULL_SCAN")
+    review_ids = {r.benefit_id for r in context_pkg.review_items}
+
+    # Benefit A must be in review_items
+    assert "BEN-041A" in review_ids
+    # Benefit B and C must not be in review_items
+    assert "BEN-041B" not in review_ids
+    assert "BEN-041C" not in review_ids
+
+# TEST-042: Old SQLite schema migration
+def test_042_old_sqlite_schema_migration():
+    from sqlalchemy import create_engine, text
+    from ai_benefit_desk.db.init_db import init_db
+    
+    # Create temporary SQLite in-memory database with raw old schema (actual_checked_at NOT NULL)
+    test_engine = create_engine("sqlite:///:memory:")
+    with test_engine.connect() as conn:
+        conn.execute(text("""
+            CREATE TABLE coverage_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                coverage_id VARCHAR(32) NOT NULL UNIQUE,
+                scan_id VARCHAR(64) NOT NULL,
+                vendor VARCHAR(128) NOT NULL,
+                product VARCHAR(128) NOT NULL,
+                wallet VARCHAR(128) DEFAULT 'UNKNOWN',
+                surface VARCHAR(64) NOT NULL,
+                region VARCHAR(32) NOT NULL,
+                coverage_state VARCHAR(32) NOT NULL,
+                scan_observed_at VARCHAR(64) NOT NULL,
+                actual_checked_at VARCHAR(64) NOT NULL,
+                next_review_at VARCHAR(32) DEFAULT 'UNKNOWN',
+                source_id VARCHAR(32),
+                basis_coverage_id VARCHAR(32),
+                notes TEXT DEFAULT '',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        conn.execute(text("""
+            INSERT INTO coverage_history (
+                coverage_id, scan_id, vendor, product, surface, region, coverage_state,
+                scan_observed_at, actual_checked_at, next_review_at
+            ) VALUES (
+                'COV-OLD-001', 'SCAN-OLD-001', 'OpenAI', 'ChatGPT', 'PRICING', 'GLOBAL',
+                'CHECKED_FOUND', '2026-08-01T10:00:00+08:00', '2026-08-01T10:00:00+08:00', '2026-09-01'
+            )
+        """))
+        conn.commit()
+
+    # Run init_db / migration on test_engine
+    init_db(bind=test_engine)
+
+    with test_engine.connect() as conn:
+        # Check historical data preserved
+        row = conn.execute(text("SELECT coverage_id, actual_checked_at FROM coverage_history WHERE coverage_id='COV-OLD-001'")).fetchone()
+        assert row is not None
+        assert row[0] == "COV-OLD-001"
+        assert row[1] == "2026-08-01T10:00:00+08:00"
+
+        # Check table schema allows NULL
+        cols = conn.execute(text("PRAGMA table_info(coverage_history)")).fetchall()
+        for col in cols:
+            if col[1] == "actual_checked_at":
+                assert col[3] == 0  # notnull is 0 (nullable)
+
+        # Test inserting record with NULL actual_checked_at
+        conn.execute(text("""
+            INSERT INTO coverage_history (
+                coverage_id, scan_id, vendor, product, surface, region, coverage_state,
+                scan_observed_at, actual_checked_at
+            ) VALUES (
+                'COV-NEW-002', 'SCAN-NEW-002', 'Anthropic', 'Claude', 'PORTAL', 'GLOBAL',
+                'NOT_CHECKED', '2026-08-18T18:00:00+08:00', NULL
+            )
+        """))
+        conn.commit()
+        
+        count = conn.execute(text("SELECT count(*) FROM coverage_history")).scalar()
+        assert count == 2
+
+    # Re-run init_db to test idempotency
+    init_db(bind=test_engine)
+    with test_engine.connect() as conn:
+        count = conn.execute(text("SELECT count(*) FROM coverage_history")).scalar()
+        assert count == 2
+
+# TEST-043: amount semantics
+def test_043_amount_semantics():
+    # Case A: integer amount 1000 -> stored as "1000"
+    r_a = BenefitRecord(
+        vendor="OpenAI",
+        campaign_name="Test Amount Int",
+        benefit_type="API_CREDITS",
+        benefit_detail="1000 credits",
+        amount=1000,
+        first_seen="2026-08-18",
+        last_checked="2026-08-18",
+        official_source="https://openai.com",
+        source_level="S",
+        verification_status="CONFIRMED",
+        status="ACTIVE"
+    )
+    assert r_a.amount == "1000"
+
+    # Case B: float amount 12.5 -> stored as "12.5"
+    r_b = BenefitRecord(
+        vendor="OpenAI",
+        campaign_name="Test Amount Float",
+        benefit_type="API_CREDITS",
+        benefit_detail="12.5 USD",
+        amount=12.5,
+        first_seen="2026-08-18",
+        last_checked="2026-08-18",
+        official_source="https://openai.com",
+        source_level="S",
+        verification_status="CONFIRMED",
+        status="ACTIVE"
+    )
+    assert r_b.amount == "12.5"
+
+    # Case C: amount = "UNKNOWN"
+    r_c = BenefitRecord(
+        vendor="OpenAI",
+        campaign_name="Test Amount UNKNOWN",
+        benefit_type="FREE_MODEL",
+        benefit_detail="detail",
+        amount="UNKNOWN",
+        first_seen="2026-08-18",
+        last_checked="2026-08-18",
+        official_source="https://openai.com",
+        source_level="S",
+        verification_status="CONFIRMED",
+        status="ACTIVE"
+    )
+    assert r_c.amount == "UNKNOWN"
+
+    # Case D: amount = "many credits" -> FAIL
+    with pytest.raises(Exception):
+        BenefitRecord(
+            vendor="OpenAI",
+            campaign_name="Test Amount Text",
+            benefit_type="API_CREDITS",
+            benefit_detail="detail",
+            amount="many credits",
+            first_seen="2026-08-18",
+            last_checked="2026-08-18",
+            official_source="https://openai.com",
+            source_level="S",
+            verification_status="CONFIRMED",
+            status="ACTIVE"
+        )
+
+    # Case E: amount = "unlimited" -> FAIL
+    with pytest.raises(Exception):
+        BenefitRecord(
+            vendor="OpenAI",
+            campaign_name="Test Amount Unlimited",
+            benefit_type="API_CREDITS",
+            benefit_detail="detail",
+            amount="unlimited",
+            first_seen="2026-08-18",
+            last_checked="2026-08-18",
+            official_source="https://openai.com",
+            source_level="S",
+            verification_status="CONFIRMED",
+            status="ACTIVE"
+        )
+
+

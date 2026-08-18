@@ -86,6 +86,7 @@ class ExportService:
                 is_review_due(b.next_review_date, ref_date=today) or
                 b.status in ("EXPIRING_SOON", "UNKNOWN", "WAITLIST") or
                 b.verification_status in ("LIKELY", "DISPUTED") or
+                (b.status == "ACTIVE" and (not b.end_date or b.end_date == "UNKNOWN") and (not b.next_review_date or b.next_review_date == "UNKNOWN")) or
                 requested_mode == "DEEP_FULL_SCAN"  # Deep scan includes all for baseline refresh
             )
             if needs_review:
@@ -127,6 +128,7 @@ class ExportService:
                         notes=b.notes or ""
                     )
                 )
+
 
         # 5. Open Leads
         leads_query = db.query(LeadModel).filter_by(status="OPEN")
@@ -247,10 +249,9 @@ class ExportService:
             baseline_revision=baseline_revision,
             baseline_state=baseline_state,
             regions=["CN", "TW", "US", "GLOBAL"],
-            requested_mode=requested_mode,
-            protocol_version=PROTOCOL_VERSION,
-            benefit_schema_version=BENEFIT_SCHEMA_VERSION
+            requested_mode=requested_mode
         )
+
 
         return ScanContextPackage(
             protocol_version=PROTOCOL_VERSION,

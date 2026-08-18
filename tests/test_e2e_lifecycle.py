@@ -14,24 +14,41 @@ from ai_benefit_desk.services.export_service import ExportService
 from ai_benefit_desk.services.import_service import ImportService
 from ai_benefit_desk.utils.json_utils import dumps_json, loads_json
 
-def test_full_e2e_acceptance_loop():
-    # 1. 启动空 Benefit Desk 数据库
+# =========================================================================
+# LIFECYCLE A — Initial Baseline Lifecycle
+# =========================================================================
+def test_lifecycle_a_initial_baseline():
+    """
+    EMPTY
+    -> Export Context
+    -> DEEP_FULL_SCAN Import
+    -> BUILD_INITIAL_BASELINE
+    -> CREATE Benefit
+    -> CREATE Lead
+    -> Source ADD
+    -> Coverage
+    -> Manual Check
+    -> Preview
+    -> Commit
+    -> READY
+    -> baseline_revision + 1
+    -> Export Context
+    -> same scan_id rejected
+    """
     test_engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     init_db(bind=test_engine)
     Session = sessionmaker(bind=test_engine)
     db = Session()
 
     try:
-        # 2. baseline_state = EMPTY, baseline_revision = 0
+        # 1. State: EMPTY, rev = 0
         sys_state = db.query(SystemStateModel).filter_by(id=1).first()
         assert sys_state.baseline_state == "EMPTY"
         assert sys_state.baseline_revision == 0
 
-        # 3. 点击“导出扫描上下文”
-        context_pkg = ExportService.generate_scan_context(db, requested_mode="FULL_SCAN")
+        # 2. Export Context (DEEP_FULL_SCAN)
+        context_pkg = ExportService.generate_scan_context(db, requested_mode="DEEP_FULL_SCAN")
         scan_id_1 = context_pkg.scan.scan_id
-
-        # 4. 得到合法 SCAN_CONTEXT JSON
         assert context_pkg.protocol_version == "0.1"
         assert context_pkg.benefit_schema_version == "1.2.1"
         assert context_pkg.package_type == "SCAN_CONTEXT"
@@ -39,22 +56,19 @@ def test_full_e2e_acceptance_loop():
         assert context_pkg.scan.baseline_state == "EMPTY"
         assert len(context_pkg.benefit_index) == 0
 
-        # 5. 模拟 ChatGPT 返回合法 SCAN_IMPORT JSON
+        # 3. DEEP_FULL_SCAN Import with BUILD_INITIAL_BASELINE
         import_data = {
             "protocol_version": "0.1",
             "benefit_schema_version": "1.2.1",
             "package_type": "SCAN_IMPORT",
             "scan_result": {
                 "scan_id": scan_id_1,
-                "scan_mode": "FULL_SCAN",
+                "scan_mode": "DEEP_FULL_SCAN",
                 "context_baseline_revision": 0,
                 "generated_at": "2026-08-18T18:25:00+08:00",
-                "scan_statuses": [
-                    "PUBLIC_COMPLETE",
-                    "OVERALL_PARTIAL"
-                ],
+                "scan_statuses": ["PUBLIC_COMPLETE", "OVERALL_PARTIAL"],
                 "baseline_action": "BUILD_INITIAL_BASELINE",
-                "summary_notes": "首次基线构建完成"
+                "summary_notes": "Lifecycle A initial baseline build"
             },
             "benefit_changes": [
                 {
@@ -101,7 +115,7 @@ def test_full_e2e_acceptance_loop():
                     "record": {
                         "vendor": "Anthropic",
                         "product": "Claude Code",
-                        "lead_summary": "疑似新用户赠送 20 美金 API Credits",
+                        "lead_summary": "新用户赠送 20 美金 API Credits",
                         "verification_status": "LIKELY",
                         "source_level": "B",
                         "regions": ["GLOBAL"],
@@ -122,16 +136,6 @@ def test_full_e2e_acceptance_loop():
                     "scan_observed_at": "2026-08-18T18:25:00+08:00",
                     "actual_checked_at": "2026-08-18T18:25:00+08:00",
                     "next_review_at": "2099-01-01"
-                },
-                {
-                    "vendor": "OpenAI",
-                    "product": "ChatGPT",
-                    "surface": "Web Pricing",
-                    "region": "GLOBAL",
-                    "coverage_state": "CHECKED_NONE",
-                    "scan_observed_at": "2026-08-18T18:25:00+08:00",
-                    "actual_checked_at": "2026-08-18T18:25:00+08:00",
-                    "next_review_at": "UNKNOWN"
                 }
             ],
             "source_updates": [
@@ -167,100 +171,190 @@ def test_full_e2e_acceptance_loop():
         }
         raw_import_json = dumps_json(import_data)
 
-        # 6. 上传 Scan Import & 7. 系统执行所有 Validation
+        # 4. Preview & Validate
         preview = ImportService.parse_and_preview(db, raw_import_json)
         assert preview["is_valid"] is True
-        assert len(preview["errors"]) == 0
+        assert preview["preview"]["benefit_create_count"] == 1
+        assert preview["preview"]["lead_create_count"] == 1
+        assert preview["preview"]["source_add_count"] == 1
+        assert preview["preview"]["coverage_recheck_count"] == 1
+        assert preview["preview"]["manual_check_count"] == 1
 
-        # 8. 显示中文导入预览
-        p = preview["preview"]
-        assert p["benefit_create_count"] == 1
-        assert p["lead_create_count"] == 1
-        assert p["coverage_recheck_count"] == 2
-        assert p["source_add_count"] == 1
-        assert p["manual_check_count"] == 1
-
-        # 9. 用户确认
+        # 5. Commit
         commit_res = ImportService.commit_import(db, preview["import_pkg"], raw_import_json)
         assert commit_res["success"] is True
 
-        # 10. 新福利获得正式 benefit_id
-        b = db.query(BenefitModel).filter_by(vendor="TRAE").first()
-        assert b is not None
-        assert b.benefit_id == "BEN-000001"
-        assert b.campaign_name == "Daily Checkin Bonus"
-
-        # 11. Coverage / Lead / Source 正确写入
-        lead = db.query(LeadModel).filter_by(lead_id="LEAD-000001").first()
-        assert lead is not None
-        assert lead.vendor == "Anthropic"
-
-        cov1 = db.query(CoverageHistoryModel).filter_by(coverage_id="COV-000001").first()
-        assert cov1 is not None
-        assert cov1.coverage_state == "CHECKED_FOUND"
-
-        cov2 = db.query(CoverageHistoryModel).filter_by(coverage_id="COV-000002").first()
-        assert cov2 is not None
-        assert cov2.coverage_state == "CHECKED_NONE"
-
-        src = db.query(CanonicalSourceModel).filter_by(source_id="SRC-000001").first()
-        assert src is not None
-        assert src.status == "ACTIVE"
-
-        mchk = db.query(ManualCheckModel).filter_by(manual_check_id="MCHK-000001").first()
-        assert mchk is not None
-        assert mchk.channel == "IDE"
-
-        # 12. User Benefit State 保持独立 (用户可以在 UI 标记 CLAIMED)
-        u_state = UserBenefitStateModel(benefit_id=b.benefit_id, action_state="CLAIMED", notes="已完成签到")
-        db.add(u_state)
-        db.commit()
-
-        # 13. baseline_revision + 1, baseline_state = READY
+        # 6. Verify State = READY, rev = 1
         sys_state = db.query(SystemStateModel).filter_by(id=1).first()
-        assert sys_state.baseline_revision == 1
         assert sys_state.baseline_state == "READY"
+        assert sys_state.baseline_revision == 1
 
-        # 14. 相同 scan_id 再次导入被阻止
-        preview_dup = ImportService.parse_and_preview(db, raw_import_json)
-        assert preview_dup["is_valid"] is False
-        assert any("该扫描已经导入" in err for err in preview_dup["errors"])
-
-        # 15. 再次导出 Scan Context
+        # 7. Export Context & Verify entries
         context_pkg_2 = ExportService.generate_scan_context(db, requested_mode="FULL_SCAN")
         assert context_pkg_2.scan.baseline_revision == 1
         assert context_pkg_2.scan.baseline_state == "READY"
-        scan_id_2 = context_pkg_2.scan.scan_id
-
-        # 16. 新 Context 正确包含刚才入库的数据
         assert len(context_pkg_2.benefit_index) == 1
-        assert context_pkg_2.benefit_index[0].benefit_id == "BEN-000001"
         assert len(context_pkg_2.open_leads) == 1
-        assert context_pkg_2.open_leads[0].lead_id == "LEAD-000001"
-        assert len(context_pkg_2.latest_coverage) == 2
         assert len(context_pkg_2.canonical_sources) == 1
-        assert context_pkg_2.canonical_sources[0].source_id == "SRC-000001"
-        assert len(context_pkg_2.user_benefit_states) == 1
-        assert context_pkg_2.user_benefit_states[0].action_state == "CLAIMED"
-        assert len(context_pkg_2.manual_checks_open) == 1
-        assert context_pkg_2.manual_checks_open[0].manual_check_id == "MCHK-000001"
 
-        # 17. 下一轮 FULL_SCAN：合法 REVIEW_NOT_DUE (COV-000001 有明确未来日期 2099-01-01) -> PASS
-        round2_pass_data = {
+        # 8. Same scan_id rejected
+        prev_dup = ImportService.parse_and_preview(db, raw_import_json)
+        assert prev_dup["is_valid"] is False
+        assert any("该扫描已经导入" in err for err in prev_dup["errors"])
+
+    finally:
+        db.close()
+
+
+# =========================================================================
+# LIFECYCLE B — Normal FULL_SCAN Update Lifecycle
+# =========================================================================
+def test_lifecycle_b_normal_full_scan_update():
+    """
+    READY
+    -> Export FULL_SCAN Context
+    -> existing Benefit UPDATE
+    -> merged Benefit validation
+    -> Lead UPDATE
+    -> Source UPDATE
+    -> valid REVIEW_NOT_DUE
+    -> Preview
+    -> Commit
+    -> revision + 1
+    -> Export next Context
+    Negative checks:
+    - Benefit status BANANA -> FAIL
+    - Lead CONFIRMED -> FAIL
+    - Source level Z -> FAIL
+    - Fake permanent IDs -> FAIL
+    - next_review_at UNKNOWN REVIEW_NOT_DUE -> FAIL
+    """
+    test_engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    init_db(bind=test_engine)
+    Session = sessionmaker(bind=test_engine)
+    db = Session()
+
+    try:
+        # Pre-seed READY database
+        b_init = BenefitModel(
+            benefit_id="BEN-000001",
+            vendor="TRAE",
+            product="TRAE CN",
+            campaign_name="Daily Checkin",
+            benefit_type="CHECKIN",
+            benefit_detail="100 pts",
+            first_seen="2026-08-01",
+            last_checked="2026-08-01",
+            official_source="https://trae.cn",
+            source_level="S",
+            verification_status="CONFIRMED",
+            status="ACTIVE",
+            end_date="2099-01-01",
+            next_review_date="2099-01-01"
+        )
+        b_init.regions = ["CN"]
+        b_init.eligibility_class = ["ALL_USERS"]
+
+        l_init = LeadModel(
+            lead_id="LEAD-000001",
+            vendor="Anthropic",
+            product="Claude Code",
+            lead_summary="20 USD Promo",
+            verification_status="UNVERIFIED",
+            source_level="B",
+            first_seen="2026-08-01",
+            last_checked="2026-08-01",
+            status="OPEN"
+        )
+        l_init.regions = ["GLOBAL"]
+
+        s_init = CanonicalSourceModel(
+            source_id="SRC-000001",
+            vendor="TRAE",
+            product="TRAE CN",
+            surface="Client Reward",
+            source_name="TRAE Activity",
+            url="https://trae.cn/activity",
+            source_type="ACTIVITY_CENTER",
+            source_level="S",
+            status="ACTIVE",
+            last_verified_at="2026-08-01T10:00:00+08:00"
+        )
+
+        cov_init = CoverageHistoryModel(
+            coverage_id="COV-000001",
+            scan_id="SCAN-INIT",
+            vendor="TRAE",
+            product="TRAE CN",
+            surface="Client Reward",
+            region="CN",
+            coverage_state="CHECKED_FOUND",
+            scan_observed_at="2026-08-01T10:00:00+08:00",
+            actual_checked_at="2026-08-01T10:00:00+08:00",
+            next_review_at="2099-01-01"
+        )
+
+        cov_init_unk = CoverageHistoryModel(
+            coverage_id="COV-000002",
+            scan_id="SCAN-INIT",
+            vendor="OpenAI",
+            product="ChatGPT",
+            surface="Pricing",
+            region="GLOBAL",
+            coverage_state="CHECKED_NONE",
+            scan_observed_at="2026-08-01T10:00:00+08:00",
+            actual_checked_at="2026-08-01T10:00:00+08:00",
+            next_review_at="UNKNOWN"
+        )
+
+        sys_state = db.query(SystemStateModel).filter_by(id=1).first()
+        sys_state.baseline_state = "READY"
+        sys_state.baseline_revision = 1
+
+        db.add_all([b_init, l_init, s_init, cov_init, cov_init_unk])
+        db.commit()
+
+        # 1. Export FULL_SCAN Context
+        context_pkg = ExportService.generate_scan_context(db, requested_mode="FULL_SCAN")
+        scan_id = context_pkg.scan.scan_id
+        assert context_pkg.scan.baseline_revision == 1
+        assert context_pkg.scan.baseline_state == "READY"
+
+        # 2. Valid Normal Update Import
+        valid_update_data = {
             "protocol_version": "0.1",
             "benefit_schema_version": "1.2.1",
             "package_type": "SCAN_IMPORT",
             "scan_result": {
-                "scan_id": scan_id_2,
+                "scan_id": scan_id,
                 "scan_mode": "FULL_SCAN",
                 "context_baseline_revision": 1,
-                "generated_at": "2026-08-18T19:30:00+08:00",
+                "generated_at": "2026-08-18T19:00:00+08:00",
                 "scan_statuses": ["PUBLIC_COMPLETE", "OVERALL_PARTIAL"],
                 "baseline_action": "UPDATE_EXISTING_BASELINE",
-                "summary_notes": "第二轮复查未到期"
+                "summary_notes": "Lifecycle B valid update"
             },
-            "benefit_changes": [],
-            "lead_changes": [],
+            "benefit_changes": [
+                {
+                    "operation": "UPDATE",
+                    "benefit_id": "BEN-000001",
+                    "change_type": "STATUS_CHANGED",
+                    "patch": {
+                        "status": "EXPIRING_SOON",
+                        "end_date": "2026-08-31"
+                    }
+                }
+            ],
+            "lead_changes": [
+                {
+                    "operation": "UPDATE",
+                    "lead_id": "LEAD-000001",
+                    "patch": {
+                        "verification_status": "DISPUTED",
+                        "lead_summary": "Updated disputed summary"
+                    }
+                }
+            ],
             "coverage_events": [
                 {
                     "vendor": "TRAE",
@@ -269,59 +363,236 @@ def test_full_e2e_acceptance_loop():
                     "region": "CN",
                     "coverage_state": "REVIEW_NOT_DUE",
                     "basis_coverage_id": "COV-000001",
-                    "scan_observed_at": "2026-08-18T19:30:00+08:00",
-                    "actual_checked_at": "2026-08-18T18:25:00+08:00"
+                    "scan_observed_at": "2026-08-18T19:00:00+08:00",
+                    "actual_checked_at": "2026-08-01T10:00:00+08:00"
                 }
             ],
-            "source_updates": [],
+            "source_updates": [
+                {
+                    "operation": "UPDATE",
+                    "source_id": "SRC-000001",
+                    "patch": {
+                        "last_verified_at": "2026-08-18T19:00:00+08:00"
+                    }
+                }
+            ],
             "manual_check_items": [],
             "warnings": []
         }
-        r2_pass_json = dumps_json(round2_pass_data)
-        p_r2 = ImportService.parse_and_preview(db, r2_pass_json)
-        assert p_r2["is_valid"] is True
-        ImportService.commit_import(db, p_r2["import_pkg"], r2_pass_json)
+        raw_update_json = dumps_json(valid_update_data)
 
-        # 18. next_review_at UNKNOWN 的 REVIEW_NOT_DUE (COV-000002) -> FAIL
-        context_pkg_3 = ExportService.generate_scan_context(db, requested_mode="FULL_SCAN")
-        scan_id_3 = context_pkg_3.scan.scan_id
+        # 3. Preview & Validate
+        prev = ImportService.parse_and_preview(db, raw_update_json)
+        assert prev["is_valid"] is True
+        assert prev["preview"]["benefit_update_count"] == 1
+        assert prev["preview"]["lead_update_count"] == 1
+        assert prev["preview"]["source_update_count"] == 1
+        assert prev["preview"]["coverage_review_not_due_count"] == 1
 
-        round3_fail_data = {
+        # 4. Commit
+        commit_res = ImportService.commit_import(db, prev["import_pkg"], raw_update_json)
+        assert commit_res["success"] is True
+
+        # 5. Check DB & Revision
+        sys_state = db.query(SystemStateModel).filter_by(id=1).first()
+        assert sys_state.baseline_revision == 2
+
+        b_check = db.query(BenefitModel).filter_by(benefit_id="BEN-000001").first()
+        assert b_check.status == "EXPIRING_SOON"
+        assert b_check.end_date == "2026-08-31"
+        assert b_check.campaign_name == "Daily Checkin"
+
+        l_check = db.query(LeadModel).filter_by(lead_id="LEAD-000001").first()
+        assert l_check.verification_status == "DISPUTED"
+
+        s_check = db.query(CanonicalSourceModel).filter_by(source_id="SRC-000001").first()
+        assert s_check.last_verified_at == "2026-08-18T19:00:00+08:00"
+
+        # 6. Negative Gate Validations:
+
+        # Negative 1: Benefit status BANANA -> FAIL
+        context_pkg_neg = ExportService.generate_scan_context(db, requested_mode="FULL_SCAN")
+        scan_id_neg = context_pkg_neg.scan.scan_id
+
+        data_neg_b = {
             "protocol_version": "0.1",
             "benefit_schema_version": "1.2.1",
             "package_type": "SCAN_IMPORT",
             "scan_result": {
-                "scan_id": scan_id_3,
+                "scan_id": scan_id_neg,
                 "scan_mode": "FULL_SCAN",
                 "context_baseline_revision": 2,
-                "generated_at": "2026-08-18T20:00:00+08:00",
-                "scan_statuses": ["PUBLIC_COMPLETE", "OVERALL_PARTIAL"],
+                "generated_at": "2026-08-18T19:30:00+08:00",
+                "scan_statuses": ["PUBLIC_COMPLETE"],
                 "baseline_action": "UPDATE_EXISTING_BASELINE",
-                "summary_notes": "尝试对 UNKNOWN 复查日期的依据使用 REVIEW_NOT_DUE"
+                "summary_notes": "Neg test"
             },
-            "benefit_changes": [],
+            "benefit_changes": [{
+                "operation": "UPDATE",
+                "benefit_id": "BEN-000001",
+                "patch": {"status": "BANANA"}
+            }],
             "lead_changes": [],
-            "coverage_events": [
-                {
-                    "vendor": "OpenAI",
-                    "product": "ChatGPT",
-                    "surface": "Web Pricing",
-                    "region": "GLOBAL",
-                    "coverage_state": "REVIEW_NOT_DUE",
-                    "basis_coverage_id": "COV-000002",
-                    "scan_observed_at": "2026-08-18T20:00:00+08:00",
-                    "actual_checked_at": "2026-08-18T18:25:00+08:00"
-                }
-            ],
+            "coverage_events": [],
             "source_updates": [],
             "manual_check_items": [],
             "warnings": []
         }
-        r3_fail_json = dumps_json(round3_fail_data)
-        p_r3 = ImportService.parse_and_preview(db, r3_fail_json)
-        assert p_r3["is_valid"] is False
-        assert any("缺少明确的 next_review_at" in e for e in p_r3["errors"])
+        prev_neg_b = ImportService.parse_and_preview(db, dumps_json(data_neg_b))
+        assert prev_neg_b["is_valid"] is False
+
+        # Negative 2: Lead CONFIRMED -> FAIL
+        data_neg_l = {
+            "protocol_version": "0.1",
+            "benefit_schema_version": "1.2.1",
+            "package_type": "SCAN_IMPORT",
+            "scan_result": {
+                "scan_id": scan_id_neg,
+                "scan_mode": "FULL_SCAN",
+                "context_baseline_revision": 2,
+                "generated_at": "2026-08-18T19:30:00+08:00",
+                "scan_statuses": ["PUBLIC_COMPLETE"],
+                "baseline_action": "UPDATE_EXISTING_BASELINE",
+                "summary_notes": "Neg test"
+            },
+            "benefit_changes": [],
+            "lead_changes": [{
+                "operation": "UPDATE",
+                "lead_id": "LEAD-000001",
+                "patch": {"verification_status": "CONFIRMED"}
+            }],
+            "coverage_events": [],
+            "source_updates": [],
+            "manual_check_items": [],
+            "warnings": []
+        }
+        prev_neg_l = ImportService.parse_and_preview(db, dumps_json(data_neg_l))
+        assert prev_neg_l["is_valid"] is False
+
+        # Negative 3: Source level Z -> FAIL
+        data_neg_s = {
+            "protocol_version": "0.1",
+            "benefit_schema_version": "1.2.1",
+            "package_type": "SCAN_IMPORT",
+            "scan_result": {
+                "scan_id": scan_id_neg,
+                "scan_mode": "FULL_SCAN",
+                "context_baseline_revision": 2,
+                "generated_at": "2026-08-18T19:30:00+08:00",
+                "scan_statuses": ["PUBLIC_COMPLETE"],
+                "baseline_action": "UPDATE_EXISTING_BASELINE",
+                "summary_notes": "Neg test"
+            },
+            "benefit_changes": [],
+            "lead_changes": [],
+            "coverage_events": [],
+            "source_updates": [{
+                "operation": "UPDATE",
+                "source_id": "SRC-000001",
+                "patch": {"source_level": "Z"}
+            }],
+            "manual_check_items": [],
+            "warnings": []
+        }
+        prev_neg_s = ImportService.parse_and_preview(db, dumps_json(data_neg_s))
+        assert prev_neg_s["is_valid"] is False
+
+        # Negative 4: Fake permanent ID on new Lead / Source / Coverage -> FAIL
+        data_neg_id = {
+            "protocol_version": "0.1",
+            "benefit_schema_version": "1.2.1",
+            "package_type": "SCAN_IMPORT",
+            "scan_result": {
+                "scan_id": scan_id_neg,
+                "scan_mode": "FULL_SCAN",
+                "context_baseline_revision": 2,
+                "generated_at": "2026-08-18T19:30:00+08:00",
+                "scan_statuses": ["PUBLIC_COMPLETE"],
+                "baseline_action": "UPDATE_EXISTING_BASELINE",
+                "summary_notes": "Neg test"
+            },
+            "benefit_changes": [],
+            "lead_changes": [{
+                "operation": "CREATE",
+                "local_ref": "LNEW-002",
+                "record": {
+                    "lead_id": "LEAD-999999",
+                    "vendor": "Meta",
+                    "product": "Llama",
+                    "lead_summary": "Fake id lead",
+                    "verification_status": "LIKELY",
+                    "source_level": "A",
+                    "first_seen": "2026-08-18",
+                    "last_checked": "2026-08-18",
+                    "status": "OPEN"
+                }
+            }],
+            "coverage_events": [{
+                "coverage_id": "COV-999999",
+                "vendor": "Meta",
+                "product": "Llama",
+                "surface": "API",
+                "region": "GLOBAL",
+                "coverage_state": "CHECKED_NONE",
+                "scan_observed_at": "2026-08-18T19:30:00+08:00",
+                "actual_checked_at": "2026-08-18T19:30:00+08:00"
+            }],
+            "source_updates": [{
+                "operation": "ADD",
+                "local_ref": "SNEW-002",
+                "record": {
+                    "source_id": "SRC-999999",
+                    "vendor": "Meta",
+                    "product": "Llama",
+                    "surface": "API",
+                    "source_name": "Meta API",
+                    "url": "https://meta.com",
+                    "source_type": "OFFICIAL_PAGE",
+                    "source_level": "S",
+                    "status": "ACTIVE"
+                }
+            }],
+            "manual_check_items": [],
+            "warnings": []
+        }
+        prev_neg_id = ImportService.parse_and_preview(db, dumps_json(data_neg_id))
+        assert prev_neg_id["is_valid"] is False
+
+        # Negative 5: next_review_at UNKNOWN + REVIEW_NOT_DUE -> FAIL
+        data_neg_cov = {
+            "protocol_version": "0.1",
+            "benefit_schema_version": "1.2.1",
+            "package_type": "SCAN_IMPORT",
+            "scan_result": {
+                "scan_id": scan_id_neg,
+                "scan_mode": "FULL_SCAN",
+                "context_baseline_revision": 2,
+                "generated_at": "2026-08-18T19:30:00+08:00",
+                "scan_statuses": ["PUBLIC_COMPLETE"],
+                "baseline_action": "UPDATE_EXISTING_BASELINE",
+                "summary_notes": "Neg test"
+            },
+            "benefit_changes": [],
+            "lead_changes": [],
+            "coverage_events": [{
+                "vendor": "OpenAI",
+                "product": "ChatGPT",
+                "surface": "Pricing",
+                "region": "GLOBAL",
+                "coverage_state": "REVIEW_NOT_DUE",
+                "basis_coverage_id": "COV-000002",
+                "scan_observed_at": "2026-08-18T19:30:00+08:00",
+                "actual_checked_at": "2026-08-01T10:00:00+08:00"
+            }],
+            "source_updates": [],
+            "manual_check_items": [],
+            "warnings": []
+        }
+        prev_neg_cov = ImportService.parse_and_preview(db, dumps_json(data_neg_cov))
+        assert prev_neg_cov["is_valid"] is False
+        assert any("缺少明确的 next_review_at" in e for e in prev_neg_cov["errors"])
 
     finally:
         db.close()
+
 

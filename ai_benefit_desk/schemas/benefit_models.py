@@ -90,12 +90,33 @@ class BenefitRecord(BaseModel):
     compliance_risk: Optional[str] = "NONE"
     notes: Optional[str] = ""
 
+    @field_validator("amount", mode="before")
+    @classmethod
+    def validate_amount(cls, v) -> str:
+        if v is None:
+            return "UNKNOWN"
+        if isinstance(v, (int, float)):
+            if isinstance(v, float) and v.is_integer():
+                return str(int(v))
+            return str(v)
+        if isinstance(v, str):
+            val = v.strip()
+            if not val or val.upper() == "UNKNOWN":
+                return "UNKNOWN"
+            try:
+                float(val)
+                return val
+            except ValueError:
+                raise ValueError(f"Invalid amount value: '{v}'. Must be a number (e.g. 1000, 12.5) or 'UNKNOWN'.")
+        raise ValueError(f"Invalid amount type: {type(v)}. Must be a number or 'UNKNOWN'.")
+
     @field_validator("benefit_type")
     @classmethod
     def validate_benefit_type(cls, v: str) -> str:
         if v not in VALID_BENEFIT_TYPES:
             raise ValueError(f"Invalid benefit_type: {v}")
         return v
+
 
     @field_validator("unit")
     @classmethod

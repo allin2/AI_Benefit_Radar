@@ -372,7 +372,7 @@ class ImportService:
             for sop in import_pkg.source_updates:
                 if sop.operation == "ADD":
                     srec = sop.record
-                    src_id = local_ref_to_id.get(sop.local_ref) or IdService.generate_source_id(db)
+                    src_id = local_ref_to_id[sop.local_ref]
                     src_model = CanonicalSourceModel(
                         source_id=src_id,
                         vendor=srec.vendor,

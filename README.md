@@ -89,7 +89,9 @@ AI_Benefit_Randar/
 │       └── json_utils.py       # JSON 序列化工具
 ├── tests/
 │   ├── conftest.py             # 测试夹具 (内存 SQLite)
-│   └── test_benefit_desk.py    # TEST-001 ~ TEST-017 全量单测
+│   ├── test_benefit_desk.py    # TEST-001 ~ TEST-043 全量单测
+│   ├── test_compliance.py      # Golden Fixture 与 Protocol 规约合规测试
+│   └── test_e2e_lifecycle.py   # 生命周期 A (初始基线) 与生命周期 B (常规全扫) 端到端测试
 ├── data/
 │   └── benefit_desk.db         # 本地 SQLite 数据文件
 ├── README.md                   # 项目说明
@@ -98,7 +100,7 @@ AI_Benefit_Randar/
 
 ---
 
-## 🧪 自动化测试验证 (TEST-001 ~ TEST-035 Protocol Regression Tests)
+## 🧪 自动化测试验证 (TEST-001 ~ TEST-043 Protocol Regression & Lifecycle Tests)
 
 - `TEST-001`: 首次 EMPTY Context 可以正常导出
 - `TEST-002`: CREATE Benefit 入库后生成永久 benefit_id
@@ -135,4 +137,13 @@ AI_Benefit_Randar/
 - `TEST-033`: NOT_CHECKED 与 BLIND_SPOT 正确持久化 NULL actual_checked_at 且 CHECKED_NONE 缺 actual_checked_at 阻断
 - `TEST-034`: Source ADD 缺失 last_verified_at 时自动填充 timezone-aware ISO8601 且二次导出校验通过
 - `TEST-035`: 新建 Manual Check 必须使用 local_ref，严禁外部自定义永久 manual_check_id
+- `TEST-036`: Benefit UPDATE 增量 patch 与既有记录合并完整校验 (禁止伪造/外来字段，非法枚举/格式阻断)
+- `TEST-037`: Lead UPDATE 增量合并校验 (严禁篡改 lead_id 与外来字段，合法更新通过)
+- `TEST-038`: Canonical Source UPDATE 增量合并校验 (严禁非法 source_level 与非时区时间戳)
+- `TEST-039`: Lead 严禁以 CONFIRMED 长期存在 (必须使用 RESOLVE_TO_BENEFIT 转为正规福利)
+- `TEST-040`: 永久唯一 ID (benefit_id/lead_id/source_id/coverage_id/manual_check_id/scan_id) 严格由 Desk 所有与控制
+- `TEST-041`: 到期复查规划覆盖：ACTIVE 且 end_date/next_review_date 为 UNKNOWN 自动纳入 review_items
+- `TEST-042`: SQLite 既有数据库无缝迁移 (actual_checked_at nullable 迁移且不丢弃数据)
+- `TEST-043`: amount 字段严格语义解析与校验 (支持整数/浮点/数字字符串/UNKNOWN，阻断自然语言描述)
+
 

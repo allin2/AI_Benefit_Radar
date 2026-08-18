@@ -42,9 +42,10 @@ def test_compliance_001_scan_context_golden(db_session):
 
     exported = ExportService.generate_scan_context(db_session, requested_mode="FULL_SCAN")
     assert exported.package_type == "SCAN_CONTEXT"
-    assert exported.scan.protocol_version == "0.1"
-    assert exported.scan.benefit_schema_version == "1.2.1"
+    assert exported.protocol_version == "0.1"
+    assert exported.benefit_schema_version == "1.2.1"
     assert exported.scan.regions == ["CN", "TW", "US", "GLOBAL"]
+
 
 # COMPLIANCE-002: canonical SCAN_IMPORT 最小 JSON 能够成功 parse
 def test_compliance_002_scan_import_golden(db_session):
@@ -603,10 +604,11 @@ def test_compliance_027_unknown_fact_vs_null_id(db_session):
     assert rec["wallet"] == "UNKNOWN"
     assert rec["start_date"] == "UNKNOWN"
 
-# COMPLIANCE-028: 正式 Export 只产生 protocol_version = "0.1", benefit_schema_version = "1.2.1"
+# COMPLIANCE-028: 正式 Export 只在顶层产生 protocol_version = "0.1", benefit_schema_version = "1.2.1"
 def test_compliance_028_export_versions(db_session):
     exported = ExportService.generate_scan_context(db_session, requested_mode="FULL_SCAN")
     assert exported.protocol_version == "0.1"
     assert exported.benefit_schema_version == "1.2.1"
-    assert exported.scan.protocol_version == "0.1"
-    assert exported.scan.benefit_schema_version == "1.2.1"
+    assert not hasattr(exported.scan, "protocol_version")
+    assert not hasattr(exported.scan, "benefit_schema_version")
+

@@ -58,9 +58,13 @@ VALID_LEAD_OPERATIONS = {
 VALID_REGIONS = {
     "CN", "TW", "US", "GLOBAL", "OTHER", "UNKNOWN"
 }
+VALID_LEAD_VERIFICATION_STATUSES = {
+    "LIKELY", "UNVERIFIED", "DISPUTED"
+}
 VALID_VERIFICATION_STATUSES = {
     "CONFIRMED", "LIKELY", "UNVERIFIED", "DISPUTED"
 }
+
 VALID_SOURCE_STATUSES = {
     "ACTIVE", "DEPRECATED"
 }
@@ -197,8 +201,10 @@ class LeadRecord(BaseModel):
     @classmethod
     def validate_verification_status(cls, v: str) -> str:
         val = v.upper()
-        if val not in VALID_VERIFICATION_STATUSES:
-            raise ValueError(f"Invalid verification_status: {val}")
+        if val == "CONFIRMED":
+            raise ValueError("已确认线索必须通过 RESOLVE_TO_BENEFIT 转为正式福利，不能继续保留为 CONFIRMED Lead。")
+        if val not in VALID_LEAD_VERIFICATION_STATUSES:
+            raise ValueError(f"Invalid verification_status for Lead: {val}")
         return val
 
     @field_validator("source_level")
@@ -402,8 +408,6 @@ class ScanMetadata(BaseModel):
     baseline_state: str
     regions: List[str] = Field(default_factory=lambda: ["CN", "TW", "US", "GLOBAL"])
     requested_mode: str = "FULL_SCAN"
-    protocol_version: str = "0.1"
-    benefit_schema_version: str = "1.2.1"
 
     @field_validator("generated_at")
     @classmethod
@@ -411,6 +415,7 @@ class ScanMetadata(BaseModel):
         if not is_valid_timezone_iso8601(v):
             raise ValueError(f"generated_at must be timezone-aware ISO8601 (e.g. 2026-08-18T19:00:00+08:00): {v}")
         return v
+
 
     @field_validator("baseline_state")
     @classmethod
