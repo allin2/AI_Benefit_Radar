@@ -1,6 +1,6 @@
 import streamlit as st
 from ai_benefit_desk.db.database import SessionLocal
-from ai_benefit_desk.db.models import LeadModel, BenefitModel
+from ai_benefit_desk.services.compatibility_service import CompatibilityService
 from ai_benefit_desk.utils.enum_labels import (
     VERIFICATION_STATUS_LABELS, LEAD_STATUS_LABELS, SOURCE_LEVEL_LABELS, get_label
 )
@@ -10,8 +10,15 @@ st.caption("管理尚未达到正式已确认标准的福利线索（较大可�
 
 db = SessionLocal()
 try:
+    # Check compatibility warnings
+    compat_warnings = CompatibilityService.get_compatibility_warnings(db)
+    if compat_warnings:
+        for cw in compat_warnings:
+            st.warning(f"⚠️ **[历史兼容性提示]** {cw['message_zh']}")
+
     # Filter by status
     status_filter = st.radio("线索状态过滤", ["仅看待处理 (OPEN)", "全部线索 (含已转福利/已驳回)"], horizontal=True)
+
     
     query = db.query(LeadModel)
     if "仅看待处理" in status_filter:

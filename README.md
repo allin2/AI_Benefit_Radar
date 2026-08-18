@@ -100,7 +100,7 @@ AI_Benefit_Randar/
 
 ---
 
-## 🧪 自动化测试验证 (TEST-001 ~ TEST-043 Protocol Regression & Lifecycle Tests)
+## 🧪 自动化测试验证 (TEST-001 ~ TEST-059 Protocol Regression & Lifecycle Tests)
 
 - `TEST-001`: 首次 EMPTY Context 可以正常导出
 - `TEST-002`: CREATE Benefit 入库后生成永久 benefit_id
@@ -148,11 +148,22 @@ AI_Benefit_Randar/
 - `TEST-048`: Package 内部查重合并后 local_ref 交叉引用映射 (Lead 转福利精准解析)
 - `TEST-049`: Package 内部候选福利显式冲突事实检测与结构化告警
 - `TEST-050`: 历史 OPEN + CONFIRMED Lead 数据库兼容性检查与 Context 导出安全跳过
+- `TEST-051`: Benefit UPDATE Schema 完整性防御与非受控字段拦截
+- `TEST-052`: Benefit UPDATE 字符串规范化清洗与自动推断
+- `TEST-053`: Lead 严禁外部新增或更新为 CONFIRMED 终态
+- `TEST-054`: Lead UPDATE Schema 严格校验与合法更新
+- `TEST-055`: Canonical Source UPDATE Schema 与时区完整性防御
+- `TEST-056`: amount 语义解析 (数值清洗与 UNKNOWN 保持)
+- `TEST-057`: 显式冲突重复福利必须显式解决方可提交
+- `TEST-058`: Scan Context 规范信封结构与 Canonical Envelope 对齐
+- `TEST-059`: 遗留不兼容数据兼容性扫描与结构化告警服务
 - `E2E Lifecycles`:
   - `LIFECYCLE A`: 初始基线全生命周期 (EMPTY -> Export -> DEEP_FULL_SCAN -> READY -> rev=1 -> 二次导入幂等阻断)
   - `LIFECYCLE B`: 正常基线增量更新周期 (READY -> Export -> FULL_SCAN -> UPDATE 覆盖/线索/福利 -> rev=2 -> 5项负向门禁拦截)
   - `LIFECYCLE C`: 查重处理生命周期 (READY -> Export -> CREATE 匹配已有福利 -> Preview 查重 -> 用户选择 UPDATE -> 真实合并更新 -> 保持 ID 与用户状态 -> rev+1)
   - `LIFECYCLE D`: 初始基线 Package 内查重生命周期 (EMPTY -> Export -> DEEP_FULL_SCAN 2条同活动候选 -> Preview 识别 -> MERGE_LOCAL -> 单一福利入库 -> 映射同永久 ID -> READY)
+  - `LIFECYCLE E`: 校验完整性全生命周期 (门禁严格拦截 -> 冲突解决 -> 正常入库校验)
+
 
 
 

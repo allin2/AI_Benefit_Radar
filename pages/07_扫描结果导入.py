@@ -64,16 +64,29 @@ if uploaded_file is not None:
                         st.markdown(f"**候选 local_ref:** `{dup['local_ref']}` 与本次导入中的另一条候选福利 `[{target_ref}] {dup.get('existing_campaign_name')}` 可能重复")
                         st.caption(f"匹配原因: {dup['reason']}")
                         if dup.get("has_conflict"):
-                            st.warning(f"⚠️ **存在明确事实冲突:** `{dup.get('conflicts')}`，请核对后再选择合并！")
-                        choice = st.radio(
-                            f"处理策略 ({dup['local_ref']})",
-                            [f"合并到主候选福利 ({target_ref})", "仍然分别创建", "忽略该项"],
-                            key=f"dedup_choice_{dup['local_ref']}"
-                        )
-                        if "合并到主候选福利" in choice:
-                            dedup_resolutions[dup["local_ref"]] = f"MERGE_LOCAL:{target_ref}"
-                        elif "忽略该项" in choice:
-                            dedup_resolutions[dup["local_ref"]] = "IGNORE"
+                            st.warning(f"⚠️ **存在明确事实冲突:** `{dup.get('conflicts')}`，请核对后再选择处理方式！")
+                            choice = st.radio(
+                                f"处理策略 ({dup['local_ref']})",
+                                ["请选择处理方式...", "保持独立 (分别创建)", f"合并到主候选福利 ({target_ref})", "忽略该项"],
+                                key=f"dedup_choice_{dup['local_ref']}"
+                            )
+                            if "合并到主候选福利" in choice:
+                                dedup_resolutions[dup["local_ref"]] = f"MERGE_LOCAL:{target_ref}"
+                            elif "保持独立" in choice:
+                                dedup_resolutions[dup["local_ref"]] = "KEEP_SEPARATE"
+                            elif "忽略该项" in choice:
+                                dedup_resolutions[dup["local_ref"]] = "IGNORE"
+                        else:
+                            choice = st.radio(
+                                f"处理策略 ({dup['local_ref']})",
+                                [f"合并到主候选福利 ({target_ref})", "仍然分别创建", "忽略该项"],
+                                key=f"dedup_choice_{dup['local_ref']}"
+                            )
+                            if "合并到主候选福利" in choice:
+                                dedup_resolutions[dup["local_ref"]] = f"MERGE_LOCAL:{target_ref}"
+                            elif "忽略该项" in choice:
+                                dedup_resolutions[dup["local_ref"]] = "IGNORE"
+
                     else:
                         st.markdown(f"**候选 local_ref:** `{dup['local_ref']}` 与已有福利 `[{dup['existing_benefit_id']}] {dup['existing_campaign_name']}` 可能重复")
                         st.caption(f"匹配原因: {dup['reason']}")

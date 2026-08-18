@@ -33,6 +33,26 @@ class ValidationResult:
             "related_ref": related_ref
         })
 
+def validate_merged_patch(
+    existing_dict: Dict[str, Any],
+    patch: Dict[str, Any],
+    model_class: Any,
+    immutable_fields: Optional[set] = None
+) -> Any:
+    if immutable_fields:
+        for f in immutable_fields:
+            if f in patch:
+                raise ValueError(f"禁止修改 {f}")
+    candidate = existing_dict.copy()
+    candidate.update(patch)
+    validated = model_class.model_validate(candidate)
+    normalized_patch = {}
+    for k in patch.keys():
+        if hasattr(validated, k):
+            normalized_patch[k] = getattr(validated, k)
+    return validated, normalized_patch
+
+
 class ValidationService:
     @staticmethod
     def validate_import_package(
@@ -181,6 +201,9 @@ class ValidationService:
                     result.coverage_gate_failures.append({"vendor": cov.vendor, "product": cov.product, "surface": cov.surface, "reason": msg})
                     continue
 
+            elif cov.coverage_state in ("NOT_CHECKED", "BLIND_SPOT", "NOT_APPLICABLE"):
+                pass
+
 
         # 6. Global Local Ref Uniqueness & Benefit Operations Validation
         global_local_refs = set()
@@ -188,7 +211,7 @@ class ValidationService:
 
         def check_local_ref(ref: Optional[str], op_name: str) -> bool:
             if not ref:
-                result.add_error(f"{op_name} 操作必须包含 local_ref")
+                result.add_error(f"{op_name} 操作必须提供 local_ref")
                 return False
             if ref in global_local_refs:
                 result.add_error(f"同一个 Import 内 local_ref 必须全局唯一: 重复的 local_ref {ref}")
@@ -276,19 +299,21 @@ class ValidationService:
                                 "source_level": existing.source_level,
                                 "verification_status": existing.verification_status,
                                 "status": existing.status,
-                                "change_type": bop.change_type or existing.change_type or "UNKNOWN",
+                                "change_type": existing.change_type or "UNKNOWN",
                                 "account_risk": existing.account_risk or "NONE",
                                 "region_risk": existing.region_risk or "UNKNOWN",
                                 "compliance_risk": existing.compliance_risk or "NONE",
                                 "notes": existing.notes or ""
                             }
-                            candidate_dict = existing_dict.copy()
-                            candidate_dict.update(bop.patch)
+                            patch_to_validate = bop.patch.copy()
                             if bop.change_type:
-                                candidate_dict["change_type"] = bop.change_type
+                                patch_to_validate["change_type"] = bop.change_type
 
+                            validated_candidate = None
                             try:
-                                BenefitRecord.model_validate(candidate_dict)
+                                validated_candidate, _ = validate_merged_patch(
+                                    existing_dict, patch_to_validate, BenefitRecord, {"benefit_id"}
+                                )
                             except ValidationError as ve:
                                 for err in ve.errors():
                                     loc = ".".join(str(l) for l in err.get("loc", []))
@@ -297,8 +322,8 @@ class ValidationService:
                                 result.add_error(f"Benefit UPDATE patch 校验失败: {str(e)} (benefit_id: {bop.benefit_id})")
 
                             # If patch changes or sets status to CONFIRMED
-                            if candidate_dict.get("verification_status") == "CONFIRMED":
-                                patch_s_level = candidate_dict.get("source_level")
+                            if validated_candidate and validated_candidate.verification_status == "CONFIRMED":
+                                patch_s_level = validated_candidate.source_level
                                 has_sa = (
                                     patch_s_level in ("S", "A") or
                                     any(e.source_level in ("S", "A") for e in bop.evidence)
@@ -345,11 +370,6 @@ class ValidationService:
                         if lop.patch is None or not isinstance(lop.patch, dict):
                             result.add_error(f"Lead UPDATE 必须提供 patch 字典 (lead_id: {lop.lead_id})")
                         else:
-                            if "lead_id" in lop.patch:
-                                result.add_error(f"Lead UPDATE patch 禁止修改 lead_id (lead_id: {lop.lead_id})")
-                            if lop.patch.get("verification_status") == "CONFIRMED":
-                                result.add_error(f"已确认线索必须通过 RESOLVE_TO_BENEFIT 转为正式福利，不能通过 UPDATE 改为 CONFIRMED (lead_id: {lop.lead_id})")
-
                             existing_lead_dict = {
                                 "lead_id": existing_lead.lead_id,
                                 "vendor": existing_lead.vendor,
@@ -366,11 +386,11 @@ class ValidationService:
                                 "resolved_benefit_id": existing_lead.resolved_benefit_id,
                                 "rejection_reason": existing_lead.rejection_reason
                             }
-                            candidate_lead = existing_lead_dict.copy()
-                            candidate_lead.update(lop.patch)
 
                             try:
-                                LeadRecord.model_validate(candidate_lead)
+                                validate_merged_patch(
+                                    existing_lead_dict, lop.patch, LeadRecord, {"lead_id"}
+                                )
                             except ValidationError as ve:
                                 for err in ve.errors():
                                     loc = ".".join(str(l) for l in err.get("loc", []))
@@ -429,9 +449,6 @@ class ValidationService:
                         if sop.patch is None or not isinstance(sop.patch, dict):
                             result.add_error(f"Source UPDATE 必须提供 patch 字典 (source_id: {sop.source_id})")
                         else:
-                            if "source_id" in sop.patch:
-                                result.add_error(f"Source UPDATE patch 禁止修改 source_id (source_id: {sop.source_id})")
-
                             existing_src_dict = {
                                 "source_id": s_exist.source_id,
                                 "vendor": s_exist.vendor,
@@ -444,11 +461,11 @@ class ValidationService:
                                 "status": s_exist.status,
                                 "last_verified_at": s_exist.last_verified_at
                             }
-                            candidate_src = existing_src_dict.copy()
-                            candidate_src.update(sop.patch)
 
                             try:
-                                CanonicalSourceItem.model_validate(candidate_src)
+                                validate_merged_patch(
+                                    existing_src_dict, sop.patch, CanonicalSourceItem, {"source_id"}
+                                )
                             except ValidationError as ve:
                                 for err in ve.errors():
                                     loc = ".".join(str(l) for l in err.get("loc", []))

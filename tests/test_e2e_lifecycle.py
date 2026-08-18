@@ -10,9 +10,11 @@ from ai_benefit_desk.db.models import (
     BenefitModel, LeadModel, CoverageHistoryModel, CanonicalSourceModel,
     UserBenefitStateModel, ScanModel, ImportAuditModel, SystemStateModel, ManualCheckModel
 )
+from ai_benefit_desk.config import PROTOCOL_VERSION, BENEFIT_SCHEMA_VERSION
 from ai_benefit_desk.services.export_service import ExportService
 from ai_benefit_desk.services.import_service import ImportService
 from ai_benefit_desk.utils.json_utils import dumps_json, loads_json
+
 
 # =========================================================================
 # LIFECYCLE A — Initial Baseline Lifecycle
@@ -897,6 +899,447 @@ def test_lifecycle_d_initial_baseline_package_dedup():
 
     finally:
         db.close()
+
+
+# =========================================================================
+# LIFECYCLE E — Validation Integrity Lifecycle
+# =========================================================================
+def test_lifecycle_e_validation_integrity():
+    """
+    Validation Integrity Lifecycle:
+    - Pre-seed READY state with 1 Benefit, 1 Lead, 1 Canonical Source (rev=1).
+    - Export Scan Context.
+    - Negative validation gates:
+      1. Benefit UPDATE status = "BANANA" -> FAIL
+      2. Lead CREATE verification_status = "CONFIRMED" -> FAIL
+      3. Lead UPDATE verification_status = "CONFIRMED" -> FAIL
+      4. Source UPDATE source_level = "Z" -> FAIL
+      5. Benefit CREATE amount = "many credits" -> FAIL
+      6. Conflicting intra-package duplicate commit without resolution -> FAIL
+    - Positive update:
+      - Benefit UPDATE (amount=2000 as int, status="ENDED", end_date="2026-08-31")
+      - Lead UPDATE (lead_summary="Updated Lead summary", verification_status="DISPUTED")
+      - Source UPDATE (last_verified_at="2026-08-18T23:00:00+08:00", source_name="Updated Canonical API")
+      - Coverage CHECKED_FOUND
+    - Commit -> baseline_revision = 2.
+    - Export next Scan Context -> SUCCESS with rev=2 and valid data.
+    """
+    test_engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    init_db(bind=test_engine)
+    Session = sessionmaker(bind=test_engine)
+    db = Session()
+
+    try:
+        # Pre-seed READY database
+        b_init = BenefitModel(
+            benefit_id="BEN-000001",
+            vendor="VendorE",
+            product="ProductE",
+            campaign_name="Campaign E",
+            benefit_type="API_CREDITS",
+            benefit_detail="1000 Credits",
+            amount="1000",
+            unit="USD",
+            wallet="MAIN",
+            reset_policy="NONE",
+            grant_method="CLAIM",
+            eligibility="All",
+            first_seen="2026-08-01",
+            last_checked="2026-08-01",
+            official_source="https://vendore.com",
+            source_level="S",
+            verification_status="CONFIRMED",
+            status="ACTIVE"
+        )
+        b_init.regions = ["GLOBAL"]
+        b_init.eligibility_class = ["ALL_USERS"]
+        db.add(b_init)
+
+        l_init = LeadModel(
+            lead_id="LEAD-000001",
+            vendor="VendorE",
+            product="ProductE",
+            lead_summary="Lead E summary",
+            verification_status="UNVERIFIED",
+            source_level="B",
+            first_seen="2026-08-01",
+            last_checked="2026-08-01",
+            status="OPEN"
+        )
+        l_init.regions = ["GLOBAL"]
+        db.add(l_init)
+
+        s_init = CanonicalSourceModel(
+            source_id="SRC-000001",
+            vendor="VendorE",
+            product="ProductE",
+            surface="API",
+            source_name="Vendor E API Page",
+            url="https://vendore.com/api",
+            source_type="OFFICIAL_PAGE",
+            source_level="S",
+            status="ACTIVE",
+            last_verified_at="2026-08-18T18:00:00+08:00"
+        )
+        db.add(s_init)
+
+        sys_state = db.query(SystemStateModel).filter_by(id=1).first()
+        sys_state.baseline_state = "READY"
+        sys_state.baseline_revision = 1
+        db.commit()
+
+        # 1. Export Scan Context
+        context_pkg = ExportService.generate_scan_context(db, requested_mode="FULL_SCAN")
+        scan_id = context_pkg.scan.scan_id
+        assert context_pkg.scan.baseline_revision == 1
+
+        # 2. Negative Validation Gate 1: Benefit UPDATE status = "BANANA"
+        neg1 = {
+            "protocol_version": PROTOCOL_VERSION,
+            "benefit_schema_version": BENEFIT_SCHEMA_VERSION,
+            "package_type": "SCAN_IMPORT",
+            "scan_result": {
+                "scan_id": scan_id,
+                "generated_at": "2026-08-18T18:00:00+08:00",
+                "context_baseline_revision": 1,
+                "baseline_action": "UPDATE_EXISTING_BASELINE",
+                "scan_mode": "FULL_SCAN",
+                "scan_statuses": ["PUBLIC_COMPLETE"],
+                "summary_notes": "Neg 1"
+            },
+            "benefit_changes": [
+                {
+                    "operation": "UPDATE",
+                    "benefit_id": "BEN-000001",
+                    "patch": {"status": "BANANA"}
+                }
+            ],
+            "lead_changes": [],
+            "coverage_events": [],
+            "source_updates": [],
+            "manual_check_items": [],
+            "warnings": []
+        }
+        assert ImportService.parse_and_preview(db, dumps_json(neg1))["is_valid"] is False
+
+        # 3. Negative Validation Gate 2: Lead CREATE verification_status = "CONFIRMED"
+        neg2 = {
+            "protocol_version": PROTOCOL_VERSION,
+            "benefit_schema_version": BENEFIT_SCHEMA_VERSION,
+            "package_type": "SCAN_IMPORT",
+            "scan_result": {
+                "scan_id": scan_id,
+                "generated_at": "2026-08-18T18:00:00+08:00",
+                "context_baseline_revision": 1,
+                "baseline_action": "UPDATE_EXISTING_BASELINE",
+                "scan_mode": "FULL_SCAN",
+                "scan_statuses": ["PUBLIC_COMPLETE"],
+                "summary_notes": "Neg 2"
+            },
+            "benefit_changes": [],
+            "lead_changes": [
+                {
+                    "operation": "CREATE",
+                    "local_ref": "LNEW-NEG2",
+                    "record": {
+                        "vendor": "VendorE",
+                        "product": "ProductE",
+                        "lead_summary": "Confirmed lead forbidden",
+                        "verification_status": "CONFIRMED",
+                        "source_level": "S",
+                        "first_seen": "2026-08-18",
+                        "last_checked": "2026-08-18",
+                        "status": "OPEN"
+                    }
+                }
+            ],
+            "coverage_events": [],
+            "source_updates": [],
+            "manual_check_items": [],
+            "warnings": []
+        }
+        assert ImportService.parse_and_preview(db, dumps_json(neg2))["is_valid"] is False
+
+        # 4. Negative Validation Gate 3: Lead UPDATE verification_status = "CONFIRMED"
+        neg3 = {
+            "protocol_version": PROTOCOL_VERSION,
+            "benefit_schema_version": BENEFIT_SCHEMA_VERSION,
+            "package_type": "SCAN_IMPORT",
+            "scan_result": {
+                "scan_id": scan_id,
+                "generated_at": "2026-08-18T18:00:00+08:00",
+                "context_baseline_revision": 1,
+                "baseline_action": "UPDATE_EXISTING_BASELINE",
+                "scan_mode": "FULL_SCAN",
+                "scan_statuses": ["PUBLIC_COMPLETE"],
+                "summary_notes": "Neg 3"
+            },
+            "benefit_changes": [],
+            "lead_changes": [
+                {
+                    "operation": "UPDATE",
+                    "lead_id": "LEAD-000001",
+                    "patch": {"verification_status": "CONFIRMED"}
+                }
+            ],
+            "coverage_events": [],
+            "source_updates": [],
+            "manual_check_items": [],
+            "warnings": []
+        }
+        assert ImportService.parse_and_preview(db, dumps_json(neg3))["is_valid"] is False
+
+        # 5. Negative Validation Gate 4: Source UPDATE source_level = "Z"
+        neg4 = {
+            "protocol_version": PROTOCOL_VERSION,
+            "benefit_schema_version": BENEFIT_SCHEMA_VERSION,
+            "package_type": "SCAN_IMPORT",
+            "scan_result": {
+                "scan_id": scan_id,
+                "generated_at": "2026-08-18T18:00:00+08:00",
+                "context_baseline_revision": 1,
+                "baseline_action": "UPDATE_EXISTING_BASELINE",
+                "scan_mode": "FULL_SCAN",
+                "scan_statuses": ["PUBLIC_COMPLETE"],
+                "summary_notes": "Neg 4"
+            },
+            "benefit_changes": [],
+            "lead_changes": [],
+            "coverage_events": [],
+            "source_updates": [
+                {
+                    "operation": "UPDATE",
+                    "source_id": "SRC-000001",
+                    "patch": {"source_level": "Z"}
+                }
+            ],
+            "manual_check_items": [],
+            "warnings": []
+        }
+        assert ImportService.parse_and_preview(db, dumps_json(neg4))["is_valid"] is False
+
+        # 6. Negative Validation Gate 5: Benefit CREATE amount = "many credits"
+        neg5 = {
+            "protocol_version": PROTOCOL_VERSION,
+            "benefit_schema_version": BENEFIT_SCHEMA_VERSION,
+            "package_type": "SCAN_IMPORT",
+            "scan_result": {
+                "scan_id": scan_id,
+                "generated_at": "2026-08-18T18:00:00+08:00",
+                "context_baseline_revision": 1,
+                "baseline_action": "UPDATE_EXISTING_BASELINE",
+                "scan_mode": "FULL_SCAN",
+                "scan_statuses": ["PUBLIC_COMPLETE"],
+                "summary_notes": "Neg 5"
+            },
+            "benefit_changes": [
+                {
+                    "operation": "CREATE",
+                    "local_ref": "BNEW-NEG5",
+                    "record": {
+                        "vendor": "VendorE",
+                        "product": "ProductE",
+                        "campaign_name": "Invalid Amount Campaign",
+                        "benefit_type": "API_CREDITS",
+                        "benefit_detail": "Details",
+                        "amount": "many credits",
+                        "unit": "USD",
+                        "wallet": "MAIN",
+                        "reset_policy": "NONE",
+                        "grant_method": "CLAIM",
+                        "eligibility": "All",
+                        "eligibility_class": ["ALL_USERS"],
+                        "first_seen": "2026-08-18",
+                        "last_checked": "2026-08-18",
+                        "official_source": "https://vendore.com",
+                        "source_level": "S",
+                        "verification_status": "CONFIRMED",
+                        "status": "ACTIVE"
+                    }
+                }
+            ],
+            "lead_changes": [],
+            "coverage_events": [],
+            "source_updates": [],
+            "manual_check_items": [],
+            "warnings": []
+        }
+        assert ImportService.parse_and_preview(db, dumps_json(neg5))["is_valid"] is False
+
+
+        # 7. Negative Validation Gate 6: Unresolved conflicting duplicate commit
+        neg6 = {
+            "protocol_version": PROTOCOL_VERSION,
+            "benefit_schema_version": BENEFIT_SCHEMA_VERSION,
+            "package_type": "SCAN_IMPORT",
+            "scan_result": {
+                "scan_id": scan_id,
+                "generated_at": "2026-08-18T18:00:00+08:00",
+                "context_baseline_revision": 1,
+                "baseline_action": "UPDATE_EXISTING_BASELINE",
+                "scan_mode": "FULL_SCAN",
+                "scan_statuses": ["PUBLIC_COMPLETE"],
+                "summary_notes": "Neg 6"
+            },
+            "benefit_changes": [
+                {
+                    "operation": "CREATE",
+                    "local_ref": "BNEW-001",
+                    "record": {
+                        "vendor": "VendorDup",
+                        "product": "ProductDup",
+                        "campaign_name": "Dup Campaign",
+                        "benefit_type": "API_CREDITS",
+                        "benefit_detail": "Detail 1",
+                        "amount": 100,
+                        "unit": "USD",
+                        "wallet": "MAIN",
+                        "reset_policy": "NONE",
+                        "grant_method": "CLAIM",
+                        "eligibility": "All",
+                        "eligibility_class": ["ALL_USERS"],
+                        "first_seen": "2026-08-18",
+                        "last_checked": "2026-08-18",
+                        "official_source": "https://dup.com/1",
+                        "source_level": "S",
+                        "verification_status": "CONFIRMED",
+                        "status": "ACTIVE"
+                    }
+                },
+                {
+                    "operation": "CREATE",
+                    "local_ref": "BNEW-002",
+                    "record": {
+                        "vendor": "VendorDup",
+                        "product": "ProductDup",
+                        "campaign_name": "Dup Campaign",
+                        "benefit_type": "API_CREDITS",
+                        "benefit_detail": "Detail 2",
+                        "amount": 200,
+                        "unit": "USD",
+                        "wallet": "MAIN",
+                        "reset_policy": "NONE",
+                        "grant_method": "CLAIM",
+                        "eligibility": "All",
+                        "eligibility_class": ["ALL_USERS"],
+                        "first_seen": "2026-08-18",
+                        "last_checked": "2026-08-18",
+                        "official_source": "https://dup.com/2",
+                        "source_level": "S",
+                        "verification_status": "CONFIRMED",
+                        "status": "ACTIVE"
+                    }
+                }
+            ],
+            "lead_changes": [],
+            "coverage_events": [],
+            "source_updates": [],
+            "manual_check_items": [],
+            "warnings": []
+        }
+        with pytest.raises(ValueError, match="存在尚未处理的冲突福利"):
+            ImportService.commit_import(db, dumps_json(neg6), dedup_resolutions={})
+
+        # 8. Positive Validation & Commit
+        pos_pkg = {
+            "protocol_version": PROTOCOL_VERSION,
+            "benefit_schema_version": BENEFIT_SCHEMA_VERSION,
+            "package_type": "SCAN_IMPORT",
+            "scan_result": {
+                "scan_id": scan_id,
+                "generated_at": "2026-08-18T18:00:00+08:00",
+                "context_baseline_revision": 1,
+                "baseline_action": "UPDATE_EXISTING_BASELINE",
+                "scan_mode": "FULL_SCAN",
+                "scan_statuses": ["PUBLIC_COMPLETE"],
+                "summary_notes": "Positive Update Lifecycle"
+            },
+            "benefit_changes": [
+                {
+                    "operation": "UPDATE",
+                    "benefit_id": "BEN-000001",
+                    "patch": {
+                        "amount": 2000,
+                        "status": "ENDED",
+                        "end_date": "2026-08-31"
+                    }
+                }
+            ],
+            "lead_changes": [
+                {
+                    "operation": "UPDATE",
+                    "lead_id": "LEAD-000001",
+                    "patch": {
+                        "lead_summary": "Updated Lead summary",
+                        "verification_status": "DISPUTED"
+                    }
+                }
+            ],
+            "coverage_events": [
+                {
+                    "vendor": "VendorE",
+                    "product": "ProductE",
+                    "wallet": "MAIN",
+                    "surface": "API",
+                    "region": "GLOBAL",
+                    "coverage_state": "CHECKED_FOUND",
+                    "scan_observed_at": "2026-08-18T18:00:00+08:00",
+                    "actual_checked_at": "2026-08-18T18:00:00+08:00",
+                    "next_review_at": "2026-09-18"
+                }
+            ],
+            "source_updates": [
+                {
+                    "operation": "UPDATE",
+                    "source_id": "SRC-000001",
+                    "patch": {
+                        "source_name": "Updated Canonical API",
+                        "last_verified_at": "2026-08-18T23:00:00+08:00"
+                    }
+                }
+            ],
+            "manual_check_items": [],
+            "warnings": []
+        }
+        pos_raw = dumps_json(pos_pkg)
+        prev_pos = ImportService.parse_and_preview(db, pos_raw)
+        assert prev_pos["is_valid"] is True
+
+        commit_res = ImportService.commit_import(db, prev_pos["import_pkg"], pos_raw)
+        assert commit_res["success"] is True
+
+
+        # 9. Verify Database Records
+        b_db = db.query(BenefitModel).filter_by(benefit_id="BEN-000001").first()
+        assert b_db.amount == "2000"
+        assert b_db.status == "ENDED"
+        assert b_db.end_date == "2026-08-31"
+
+        l_db = db.query(LeadModel).filter_by(lead_id="LEAD-000001").first()
+        assert l_db.lead_summary == "Updated Lead summary"
+        assert l_db.verification_status == "DISPUTED"
+
+        s_db = db.query(CanonicalSourceModel).filter_by(source_id="SRC-000001").first()
+        assert s_db.source_name == "Updated Canonical API"
+        assert s_db.last_verified_at == "2026-08-18T23:00:00+08:00"
+
+        sys_state = db.query(SystemStateModel).filter_by(id=1).first()
+        assert sys_state.baseline_revision == 2
+
+        # 10. Next Export Scan Context has rev 2 and valid records
+        next_ctx = ExportService.generate_scan_context(db, requested_mode="FULL_SCAN")
+        assert next_ctx.scan.baseline_revision == 2
+        assert len(next_ctx.benefit_index) == 1
+        assert next_ctx.benefit_index[0].status == "ENDED"
+        assert next_ctx.benefit_index[0].end_date == "2026-08-31"
+        assert len(next_ctx.open_leads) == 1
+        assert next_ctx.open_leads[0].verification_status == "DISPUTED"
+        assert len(next_ctx.canonical_sources) == 1
+        assert next_ctx.canonical_sources[0].source_name == "Updated Canonical API"
+
+    finally:
+        db.close()
+
 
 
 

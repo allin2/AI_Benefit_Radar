@@ -95,6 +95,8 @@ class BenefitRecord(BaseModel):
     def validate_amount(cls, v) -> str:
         if v is None:
             return "UNKNOWN"
+        if isinstance(v, bool):
+            raise ValueError(f"Invalid amount value: {v}. Booleans are not allowed.")
         if isinstance(v, (int, float)):
             if isinstance(v, float) and v.is_integer():
                 return str(int(v))
@@ -103,12 +105,17 @@ class BenefitRecord(BaseModel):
             val = v.strip()
             if not val or val.upper() == "UNKNOWN":
                 return "UNKNOWN"
+            if "," in val:
+                raise ValueError(f"Invalid amount value: '{v}'. Locale format with commas is not allowed.")
             try:
-                float(val)
+                f = float(val)
+                if f.is_integer() and ("." not in val or val.endswith(".0")):
+                    return str(int(f))
                 return val
             except ValueError:
                 raise ValueError(f"Invalid amount value: '{v}'. Must be a number (e.g. 1000, 12.5) or 'UNKNOWN'.")
         raise ValueError(f"Invalid amount type: {type(v)}. Must be a number or 'UNKNOWN'.")
+
 
     @field_validator("benefit_type")
     @classmethod

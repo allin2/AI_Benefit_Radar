@@ -8,12 +8,15 @@ from ai_benefit_desk.db.models import (
     UserBenefitStateModel, ManualCheckModel, ScanModel, ImportAuditModel, SystemStateModel
 )
 from ai_benefit_desk.schemas.benefit_models import BenefitRecord
-from ai_benefit_desk.schemas.protocol_models import ScanImportPackage, WarningItem
-from ai_benefit_desk.services.validation_service import ValidationService, ValidationResult
+from ai_benefit_desk.schemas.protocol_models import (
+    ScanImportPackage, WarningItem, LeadRecord, CanonicalSourceItem
+)
+from ai_benefit_desk.services.validation_service import ValidationService, ValidationResult, validate_merged_patch
 from ai_benefit_desk.services.dedup_service import DedupService
 from ai_benefit_desk.services.id_service import IdService
 from ai_benefit_desk.utils.json_utils import loads_json, dumps_json
 from ai_benefit_desk.utils.date_utils import today_str, now_timezone_iso
+
 
 
 class ImportService:
@@ -134,12 +137,19 @@ class ImportService:
     @staticmethod
     def commit_import(
         db: Session,
-        import_pkg: ScanImportPackage,
-        raw_json_str: str,
+        import_pkg: Any,
+        raw_json_str: str = "",
         dedup_resolutions: Optional[Dict[str, str]] = None,
         user_override_evidence: bool = False
     ) -> Dict[str, Any]:
         """Commit import in a single atomic database transaction."""
+        if isinstance(import_pkg, str) and not raw_json_str:
+            raw_json_str = import_pkg
+            import_pkg = None
+        if import_pkg is None and raw_json_str:
+            data = loads_json(raw_json_str)
+            import_pkg = ScanImportPackage.model_validate(data)
+
         dedup_resolutions = dedup_resolutions or {}
         local_ref_to_id: Dict[str, str] = {}
         now = datetime.utcnow()
@@ -174,8 +184,16 @@ class ImportService:
             if scan_rec.baseline_revision_at_export != import_pkg.scan_result.context_baseline_revision:
                 raise ValueError(f"扫描导出时的基线版本 ({scan_rec.baseline_revision_at_export}) 与导入包声明的上下文基线版本 ({import_pkg.scan_result.context_baseline_revision}) 不一致。")
 
-            # 2.5 Validate dedup resolutions (cycle detection)
+            # 2.5 Validate dedup resolutions (cycle detection & conflict resolution gate)
             DedupService.validate_dedup_resolutions(dedup_resolutions, import_pkg.benefit_changes)
+
+            candidate_dups = DedupService.detect_candidate_duplicates(db, import_pkg.benefit_changes)
+            for dup in candidate_dups:
+                if dup.get("has_conflict"):
+                    lref = dup.get("local_ref")
+                    res = dedup_resolutions.get(lref)
+                    if not res or (res not in ("KEEP_SEPARATE", "IGNORE") and not res.startswith("MERGE_LOCAL:")):
+                        raise ValueError(f"存在尚未处理的冲突福利，请先选择处理方式。")
 
             # Handle intra-package candidate merges (MERGE_LOCAL)
             bop_by_ref = {bop.local_ref: bop for bop in import_pkg.benefit_changes if bop.operation == "CREATE" and bop.local_ref}
@@ -189,6 +207,7 @@ class ImportService:
                             # Merge secondary facts and evidence into target primary candidate
                             target_bop.record = DedupService.merge_intra_package_candidates(target_bop.record, bop.record)
                             target_bop.evidence.extend(bop.evidence)
+
 
             # 3. Pre-generate permanent IDs for local_refs
             for bop in import_pkg.benefit_changes:
@@ -353,9 +372,62 @@ class ImportService:
                     if not existing_b:
                         raise ValueError(f"要更新的福利不存在: {target_b_id}")
 
-                    # Apply PATCH semantics
-                    patch_dict = bop.patch or {}
-                    for k, v in patch_dict.items():
+                    existing_dict = {
+                        "benefit_id": existing_b.benefit_id,
+                        "vendor": existing_b.vendor,
+                        "product": existing_b.product,
+                        "linked_vendor": existing_b.linked_vendor or "UNKNOWN",
+                        "linked_product": existing_b.linked_product or "UNKNOWN",
+                        "campaign_name": existing_b.campaign_name,
+                        "benefit_type": existing_b.benefit_type,
+                        "benefit_detail": existing_b.benefit_detail,
+                        "linked_benefit_detail": existing_b.linked_benefit_detail or "UNKNOWN",
+                        "wallet": existing_b.wallet or "UNKNOWN",
+                        "amount": existing_b.amount or "UNKNOWN",
+                        "unit": existing_b.unit or "UNKNOWN",
+                        "reset_policy": existing_b.reset_policy or "UNKNOWN",
+                        "grant_method": existing_b.grant_method or "UNKNOWN",
+                        "regions": existing_b.regions,
+                        "eligibility": existing_b.eligibility or "UNKNOWN",
+                        "eligibility_class": existing_b.eligibility_class,
+                        "start_date": existing_b.start_date or "UNKNOWN",
+                        "end_date": existing_b.end_date or "UNKNOWN",
+                        "first_seen": existing_b.first_seen,
+                        "last_checked": existing_b.last_checked,
+                        "next_review_date": existing_b.next_review_date or "UNKNOWN",
+                        "claim_method": existing_b.claim_method or "UNKNOWN",
+                        "credit_card_required": existing_b.credit_card_required or "UNKNOWN",
+                        "verification_required": existing_b.verification_required or "UNKNOWN",
+                        "official_source": existing_b.official_source,
+                        "source_level": existing_b.source_level,
+                        "verification_status": existing_b.verification_status,
+                        "status": existing_b.status,
+                        "change_type": existing_b.change_type or "UNKNOWN",
+                        "account_risk": existing_b.account_risk or "NONE",
+                        "region_risk": existing_b.region_risk or "UNKNOWN",
+                        "compliance_risk": existing_b.compliance_risk or "NONE",
+                        "notes": existing_b.notes or ""
+                    }
+                    patch_to_validate = (bop.patch or {}).copy()
+                    if bop.change_type:
+                        patch_to_validate["change_type"] = bop.change_type
+
+                    validated_candidate, validated_patch = validate_merged_patch(
+                        existing_dict, patch_to_validate, BenefitRecord, {"benefit_id"}
+                    )
+
+                    # Evidence Gate check
+                    if validated_candidate.verification_status == "CONFIRMED":
+                        patch_s_level = validated_candidate.source_level
+                        has_sa = (
+                            patch_s_level in ("S", "A") or
+                            any(e.source_level in ("S", "A") for e in bop.evidence)
+                        )
+                        if not has_sa and not user_override_evidence:
+                            raise ValueError(f"确认级别与证据不匹配: 更新福利 [{bop.benefit_id}] 状态为 CONFIRMED，但缺乏 S 或 A 级第一方证据")
+
+                    # Apply normalized validated patch
+                    for k, v in validated_patch.items():
                         if k == "regions":
                             existing_b.regions = v
                         elif k == "eligibility_class":
@@ -407,8 +479,26 @@ class ImportService:
                     if not existing_lead:
                         raise ValueError(f"要更新的线索不存在: {lop.lead_id}")
                     
-                    patch_dict = lop.patch or {}
-                    for k, v in patch_dict.items():
+                    existing_lead_dict = {
+                        "lead_id": existing_lead.lead_id,
+                        "vendor": existing_lead.vendor,
+                        "product": existing_lead.product,
+                        "lead_summary": existing_lead.lead_summary,
+                        "verification_status": existing_lead.verification_status,
+                        "source_level": existing_lead.source_level,
+                        "regions": existing_lead.regions,
+                        "missing_evidence": existing_lead.missing_evidence or "",
+                        "first_seen": existing_lead.first_seen,
+                        "last_checked": existing_lead.last_checked,
+                        "next_review_date": existing_lead.next_review_date or "UNKNOWN",
+                        "status": existing_lead.status,
+                        "resolved_benefit_id": existing_lead.resolved_benefit_id,
+                        "rejection_reason": existing_lead.rejection_reason
+                    }
+                    validated_lead, validated_patch = validate_merged_patch(
+                        existing_lead_dict, lop.patch or {}, LeadRecord, {"lead_id"}
+                    )
+                    for k, v in validated_patch.items():
                         if k == "regions":
                             existing_lead.regions = v
                         elif hasattr(existing_lead, k) and k not in ("id", "lead_id", "created_at"):
@@ -490,14 +580,29 @@ class ImportService:
                     if not existing_s:
                         raise ValueError(f"要更新的官方入口不存在: {sop.source_id}")
                     
-                    patch_dict = sop.patch or {}
-                    for k, v in patch_dict.items():
+                    existing_src_dict = {
+                        "source_id": existing_s.source_id,
+                        "vendor": existing_s.vendor,
+                        "product": existing_s.product,
+                        "surface": existing_s.surface,
+                        "source_name": existing_s.source_name,
+                        "url": existing_s.url,
+                        "source_type": existing_s.source_type,
+                        "source_level": existing_s.source_level,
+                        "status": existing_s.status,
+                        "last_verified_at": existing_s.last_verified_at
+                    }
+                    validated_src, validated_patch = validate_merged_patch(
+                        existing_src_dict, sop.patch or {}, CanonicalSourceItem, {"source_id"}
+                    )
+                    for k, v in validated_patch.items():
                         if hasattr(existing_s, k) and k not in ("id", "source_id", "created_at"):
                             setattr(existing_s, k, v)
                 elif sop.operation == "DEPRECATE":
                     existing_s = db.query(CanonicalSourceModel).filter_by(source_id=sop.source_id).first()
                     if existing_s:
                         existing_s.status = "DEPRECATED"
+
 
             # 8. Process Manual Checks
             for mop in import_pkg.manual_check_items:
