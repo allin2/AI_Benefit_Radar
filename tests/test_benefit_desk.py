@@ -1954,4 +1954,490 @@ def test_043_amount_semantics():
             status="ACTIVE"
         )
 
+# TEST-044: CREATE duplicate resolution UPDATE_EXISTING
+def test_044_create_duplicate_resolution_update_existing(db_session):
+    # Setup initial benefit
+    b = BenefitModel(
+        benefit_id="BEN-000001",
+        vendor="Vendor A",
+        product="Product A",
+        campaign_name="Vendor A Promo",
+        benefit_type="API_CREDITS",
+        benefit_detail="1000 credits",
+        amount="1000",
+        end_date="2026-08-31",
+        first_seen="2026-07-01",
+        last_checked="2026-07-01",
+        official_source="https://vendor-a.com",
+        source_level="S",
+        verification_status="CONFIRMED",
+        status="ACTIVE"
+    )
+    b.regions = ["US", "GLOBAL"]
+    b.eligibility_class = ["ALL_USERS"]
+    db_session.add(b)
+    
+    # User Benefit State: CLAIMED
+    u_state = UserBenefitStateModel(benefit_id="BEN-000001", action_state="CLAIMED", notes="User claimed")
+    db_session.add(u_state)
+    db_session.commit()
+
+    # Import with duplicate CREATE candidate BNEW-001
+    pkg = make_sample_import(db_session, "SCAN-20260818-044", rev=0)
+    pkg["benefit_changes"].append({
+        "operation": "CREATE",
+        "local_ref": "BNEW-001",
+        "record": {
+            "vendor": "Vendor A",
+            "product": "Product A",
+            "campaign_name": "Vendor A Promo",
+            "benefit_type": "API_CREDITS",
+            "benefit_detail": "2000 credits",
+            "amount": 2000,
+            "end_date": "2026-09-30",
+            "first_seen": "2026-08-18",
+            "last_checked": "2026-08-18",
+            "official_source": "https://vendor-a.com",
+            "source_level": "S",
+            "verification_status": "CONFIRMED",
+            "status": "ACTIVE"
+        },
+        "evidence": [
+            {
+                "url": "https://vendor-a.com",
+                "source_level": "S",
+                "source_role": "PRIMARY",
+                "checked_at": "2026-08-18T18:00:00+08:00",
+                "supports_fields": ["amount", "end_date"]
+            }
+        ]
+    })
+    raw_json = dumps_json(pkg)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    assert preview["is_valid"] is True
+    assert len(preview["preview"]["duplicates"]) == 1
+    assert preview["preview"]["duplicates"][0]["existing_benefit_id"] == "BEN-000001"
+
+    # User resolution: UPDATE:BEN-000001
+    resolutions = {"BNEW-001": "UPDATE:BEN-000001"}
+    commit_res = ImportService.commit_import(
+        db_session, preview["import_pkg"], raw_json, dedup_resolutions=resolutions
+    )
+    assert commit_res["success"] is True
+
+    # Assertions
+    # 1. Total count unchanged
+    total_benefits = db_session.query(BenefitModel).count()
+    assert total_benefits == 1
+
+    # 2. BEN-000001 exists and updated with new facts
+    b_updated = db_session.query(BenefitModel).filter_by(benefit_id="BEN-000001").first()
+    assert b_updated is not None
+    assert b_updated.amount == "2000"
+    assert b_updated.end_date == "2026-09-30"
+
+    # 3. first_seen preserved from existing
+    assert b_updated.first_seen == "2026-07-01"
+
+    # 4. User Benefit State preserved
+    u_chk = db_session.query(UserBenefitStateModel).filter_by(benefit_id="BEN-000001").first()
+    assert u_chk is not None
+    assert u_chk.action_state == "CLAIMED"
+
+    # 5. local_ref maps to BEN-000001
+    assert commit_res["local_ref_map"]["BNEW-001"] == "BEN-000001"
+
+# TEST-045: Dedup UNKNOWN-safe merge
+def test_045_dedup_unknown_safe_merge(db_session):
+    # Setup initial benefit with known facts
+    b = BenefitModel(
+        benefit_id="BEN-000045",
+        vendor="Vendor B",
+        product="Product B",
+        campaign_name="Campaign 45",
+        benefit_type="API_CREDITS",
+        benefit_detail="API credits deal",
+        wallet="API Credits",
+        amount="1000",
+        end_date="2026-09-30",
+        first_seen="2026-07-01",
+        last_checked="2026-07-01",
+        official_source="https://vendor-b.com",
+        source_level="S",
+        verification_status="CONFIRMED",
+        status="ACTIVE"
+    )
+    b.regions = ["US"]
+    b.eligibility_class = ["NEW_USERS"]
+    db_session.add(b)
+    db_session.commit()
+
+    # Candidate with UNKNOWN fields
+    pkg = make_sample_import(db_session, "SCAN-20260818-045", rev=0)
+    pkg["benefit_changes"].append({
+        "operation": "CREATE",
+        "local_ref": "BNEW-045",
+        "record": {
+            "vendor": "Vendor B",
+            "product": "Product B",
+            "campaign_name": "Campaign 45",
+            "benefit_type": "API_CREDITS",
+            "benefit_detail": "API credits deal",
+            "wallet": "UNKNOWN",
+            "amount": "UNKNOWN",
+            "regions": ["UNKNOWN"],
+            "end_date": "UNKNOWN",
+            "first_seen": "2026-08-18",
+            "last_checked": "2026-08-18",
+            "official_source": "https://vendor-b.com",
+            "source_level": "S",
+            "verification_status": "CONFIRMED",
+            "status": "ACTIVE"
+        },
+        "evidence": [
+            {
+                "url": "https://vendor-b.com",
+                "source_level": "S",
+                "source_role": "PRIMARY",
+                "checked_at": "2026-08-18T18:00:00+08:00"
+            }
+        ]
+    })
+    raw_json = dumps_json(pkg)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    assert preview["is_valid"] is True
+
+    resolutions = {"BNEW-045": "UPDATE:BEN-000045"}
+    commit_res = ImportService.commit_import(
+        db_session, preview["import_pkg"], raw_json, dedup_resolutions=resolutions
+    )
+    assert commit_res["success"] is True
+
+    b_chk = db_session.query(BenefitModel).filter_by(benefit_id="BEN-000045").first()
+    assert b_chk.amount == "1000"
+    assert b_chk.wallet == "API Credits"
+    assert b_chk.regions == ["US"]
+    assert b_chk.end_date == "2026-09-30"
+
+# TEST-046: Dedup update Evidence Gate
+def test_046_dedup_update_evidence_gate(db_session):
+    b = BenefitModel(
+        benefit_id="BEN-000046",
+        vendor="Vendor C",
+        product="Product C",
+        campaign_name="Campaign 46",
+        benefit_type="FREE_ACCESS",
+        benefit_detail="Free tier",
+        first_seen="2026-07-01",
+        last_checked="2026-07-01",
+        official_source="https://vendor-c.com",
+        source_level="B",
+        verification_status="LIKELY",
+        status="ACTIVE"
+    )
+    b.regions = ["GLOBAL"]
+    b.eligibility_class = ["ALL_USERS"]
+    db_session.add(b)
+    db_session.commit()
+
+    pkg = make_sample_import(db_session, "SCAN-20260818-046", rev=0)
+    pkg["benefit_changes"].append({
+        "operation": "CREATE",
+        "local_ref": "BNEW-046",
+        "record": {
+            "vendor": "Vendor C",
+            "product": "Product C",
+            "campaign_name": "Campaign 46",
+            "benefit_type": "FREE_ACCESS",
+            "benefit_detail": "Free tier",
+            "first_seen": "2026-08-18",
+            "last_checked": "2026-08-18",
+            "official_source": "https://vendor-c.com",
+            "source_level": "C",
+            "verification_status": "CONFIRMED",
+            "status": "ACTIVE"
+        },
+
+        "evidence": [
+            {
+                "url": "https://blog.example.com",
+                "source_level": "C",
+                "source_role": "PRIMARY",
+                "checked_at": "2026-08-18T18:00:00+08:00"
+            }
+        ]
+    })
+    raw_json = dumps_json(pkg)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    
+    # Commit with UPDATE:BEN-000046 without S/A evidence should fail
+    resolutions = {"BNEW-046": "UPDATE:BEN-000046"}
+    with pytest.raises(ValueError) as exc:
+        ImportService.commit_import(
+            db_session, preview["import_pkg"], raw_json,
+            dedup_resolutions=resolutions, user_override_evidence=False
+        )
+    assert "缺乏 S 或 A 级第一方证据" in str(exc.value)
+
+    # Commit with user_override_evidence=True succeeds
+    commit_res = ImportService.commit_import(
+        db_session, preview["import_pkg"], raw_json,
+        dedup_resolutions=resolutions, user_override_evidence=True
+    )
+    assert commit_res["success"] is True
+
+# TEST-047: Initial Baseline intra-package duplicate
+def test_047_initial_baseline_intra_package_duplicate(db_session):
+    # Empty DB
+    pkg = make_sample_import(db_session, "SCAN-20260818-047", rev=0, baseline_action="BUILD_INITIAL_BASELINE")
+    pkg["benefit_changes"] = [
+        {
+            "operation": "CREATE",
+            "local_ref": "BNEW-001",
+            "record": {
+                "vendor": "Vendor D",
+                "product": "Product D",
+                "campaign_name": "Campaign 47",
+                "benefit_type": "FREE_ACCESS",
+                "benefit_detail": "Official EN page",
+                "first_seen": "2026-08-18",
+                "last_checked": "2026-08-18",
+                "official_source": "https://vendor-d.com/en",
+                "source_level": "S",
+                "verification_status": "CONFIRMED",
+                "status": "ACTIVE"
+            },
+            "evidence": [
+                {
+                    "url": "https://vendor-d.com/en",
+                    "source_level": "S",
+                    "source_role": "PRIMARY",
+                    "checked_at": "2026-08-18T18:00:00+08:00"
+                }
+            ]
+        },
+        {
+            "operation": "CREATE",
+            "local_ref": "BNEW-002",
+            "record": {
+                "vendor": "Vendor D",
+                "product": "Product D",
+                "campaign_name": "Campaign 47",
+                "benefit_type": "FREE_ACCESS",
+                "benefit_detail": "Official CN page",
+                "first_seen": "2026-08-18",
+                "last_checked": "2026-08-18",
+                "official_source": "https://vendor-d.com/cn",
+                "source_level": "S",
+                "verification_status": "CONFIRMED",
+                "status": "ACTIVE"
+            },
+            "evidence": [
+                {
+                    "url": "https://vendor-d.com/cn",
+                    "source_level": "S",
+                    "source_role": "PRIMARY",
+                    "checked_at": "2026-08-18T18:00:00+08:00"
+                }
+            ]
+        }
+    ]
+    raw_json = dumps_json(pkg)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    assert preview["is_valid"] is True
+    
+    # Must detect intra-package duplicate
+    dups = preview["preview"]["duplicates"]
+    assert len(dups) == 1
+    assert dups[0]["is_intra_package"] is True
+    assert dups[0]["local_ref"] == "BNEW-002"
+    assert dups[0]["target_local_ref"] == "BNEW-001"
+
+    # User chooses merge to BNEW-001
+    resolutions = {"BNEW-002": "MERGE_LOCAL:BNEW-001"}
+    commit_res = ImportService.commit_import(
+        db_session, preview["import_pkg"], raw_json, dedup_resolutions=resolutions
+    )
+    assert commit_res["success"] is True
+
+    # Total benefits = 1
+    assert db_session.query(BenefitModel).count() == 1
+    b_created = db_session.query(BenefitModel).first()
+    assert b_created is not None
+
+    # Both local_refs resolve to the same permanent ID
+    assert commit_res["local_ref_map"]["BNEW-001"] == b_created.benefit_id
+    assert commit_res["local_ref_map"]["BNEW-002"] == b_created.benefit_id
+
+# TEST-048: Package duplicate local_ref cross-reference
+def test_048_package_duplicate_local_ref_cross_reference(db_session):
+    # Pre-seed Lead
+    lead = LeadModel(
+        lead_id="LEAD-000048",
+        vendor="Vendor D",
+        product="Product D",
+        lead_summary="Lead to resolve",
+        verification_status="UNVERIFIED",
+        source_level="B",
+        first_seen="2026-08-01",
+        last_checked="2026-08-01",
+        status="OPEN"
+    )
+    lead.regions = ["GLOBAL"]
+    db_session.add(lead)
+    db_session.commit()
+
+    pkg = make_sample_import(db_session, "SCAN-20260818-048", rev=0, baseline_action="BUILD_INITIAL_BASELINE")
+    pkg["benefit_changes"] = [
+        {
+            "operation": "CREATE",
+            "local_ref": "BNEW-001",
+            "record": {
+                "vendor": "Vendor D",
+                "product": "Product D",
+                "campaign_name": "Campaign 48",
+                "benefit_type": "FREE_ACCESS",
+                "benefit_detail": "Detail 1",
+                "first_seen": "2026-08-18",
+                "last_checked": "2026-08-18",
+                "official_source": "https://vendor-d.com",
+                "source_level": "S",
+                "verification_status": "CONFIRMED",
+                "status": "ACTIVE"
+            }
+        },
+        {
+            "operation": "CREATE",
+            "local_ref": "BNEW-002",
+            "record": {
+                "vendor": "Vendor D",
+                "product": "Product D",
+                "campaign_name": "Campaign 48",
+                "benefit_type": "FREE_ACCESS",
+                "benefit_detail": "Detail 2",
+                "first_seen": "2026-08-18",
+                "last_checked": "2026-08-18",
+                "official_source": "https://vendor-d.com",
+                "source_level": "S",
+                "verification_status": "CONFIRMED",
+                "status": "ACTIVE"
+            }
+        }
+    ]
+    pkg["lead_changes"] = [
+        {
+            "operation": "RESOLVE_TO_BENEFIT",
+            "lead_id": "LEAD-000048",
+            "target_benefit_ref": "BNEW-002"
+        }
+    ]
+    raw_json = dumps_json(pkg)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    assert preview["is_valid"] is True
+
+    resolutions = {"BNEW-002": "MERGE_LOCAL:BNEW-001"}
+    commit_res = ImportService.commit_import(
+        db_session, preview["import_pkg"], raw_json, dedup_resolutions=resolutions
+    )
+    assert commit_res["success"] is True
+
+    # Lead successfully resolved to the primary Benefit's permanent ID
+    lead_chk = db_session.query(LeadModel).filter_by(lead_id="LEAD-000048").first()
+    assert lead_chk.status == "RESOLVED"
+    assert lead_chk.resolved_benefit_id == commit_res["local_ref_map"]["BNEW-001"]
+
+# TEST-049: Package duplicate conflicting facts
+def test_049_package_duplicate_conflicting_facts(db_session):
+    pkg = make_sample_import(db_session, "SCAN-20260818-049", rev=0, baseline_action="BUILD_INITIAL_BASELINE")
+    pkg["benefit_changes"] = [
+        {
+            "operation": "CREATE",
+            "local_ref": "BNEW-001",
+            "record": {
+                "vendor": "Vendor E",
+                "product": "Product E",
+                "campaign_name": "Campaign 49",
+                "benefit_type": "API_CREDITS",
+                "benefit_detail": "Detail 1",
+                "amount": 1000,
+                "first_seen": "2026-08-18",
+                "last_checked": "2026-08-18",
+                "official_source": "https://vendor-e.com",
+                "source_level": "S",
+                "verification_status": "CONFIRMED",
+                "status": "ACTIVE"
+            }
+        },
+        {
+            "operation": "CREATE",
+            "local_ref": "BNEW-002",
+            "record": {
+                "vendor": "Vendor E",
+                "product": "Product E",
+                "campaign_name": "Campaign 49",
+                "benefit_type": "API_CREDITS",
+                "benefit_detail": "Detail 2",
+                "amount": 2000,
+                "first_seen": "2026-08-18",
+                "last_checked": "2026-08-18",
+                "official_source": "https://vendor-e.com",
+                "source_level": "S",
+                "verification_status": "CONFIRMED",
+                "status": "ACTIVE"
+            }
+        }
+    ]
+    raw_json = dumps_json(pkg)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    dups = preview["preview"]["duplicates"]
+    assert len(dups) == 1
+    assert dups[0]["has_conflict"] is True
+    assert "amount" in dups[0]["conflicts"]
+
+# TEST-050: Legacy OPEN CONFIRMED Lead compatibility
+def test_050_legacy_open_confirmed_lead_compatibility():
+    from sqlalchemy import create_engine, text
+    from ai_benefit_desk.db.init_db import init_db, check_legacy_lead_compatibility
+    from ai_benefit_desk.services.export_service import ExportService
+    from sqlalchemy.orm import sessionmaker
+
+    test_engine = create_engine("sqlite:///:memory:")
+    init_db(bind=test_engine)
+    
+    # Insert legacy invalid lead directly into DB (bypassing Pydantic validation)
+    with test_engine.connect() as conn:
+        conn.execute(text("""
+            INSERT INTO leads (
+                lead_id, vendor, product, lead_summary, verification_status,
+                source_level, first_seen, last_checked, status, regions
+            ) VALUES (
+                'LEAD-LEGACY-001', 'LegacyVendor', 'LegacyProduct', 'Legacy confirmed lead',
+                'CONFIRMED', 'S', '2026-08-01', '2026-08-01', 'OPEN', '["GLOBAL"]'
+            )
+
+        """))
+        conn.commit()
+
+    # 1. Startup compatibility check finds it
+    legacy_ids = check_legacy_lead_compatibility(test_engine)
+    assert "LEAD-LEGACY-001" in legacy_ids
+
+    # 2. Export context does not fail / crash
+    TestingSessionLocal = sessionmaker(bind=test_engine)
+    session = TestingSessionLocal()
+    try:
+        context_pkg = ExportService.generate_scan_context(session, requested_mode="FULL_SCAN")
+        # 3. Legacy lead is not output as a valid open_lead
+        open_lead_ids = {l.lead_id for l in context_pkg.open_leads}
+        assert "LEAD-LEGACY-001" not in open_lead_ids
+
+        # 4. DB record is still preserved with original status and verification_status
+        lead_row = session.query(LeadModel).filter_by(lead_id="LEAD-LEGACY-001").first()
+        assert lead_row is not None
+        assert lead_row.status == "OPEN"
+        assert lead_row.verification_status == "CONFIRMED"
+    finally:
+        session.close()
+
+
 

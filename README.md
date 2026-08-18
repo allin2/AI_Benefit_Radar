@@ -141,9 +141,18 @@ AI_Benefit_Randar/
 - `TEST-037`: Lead UPDATE 增量合并校验 (严禁篡改 lead_id 与外来字段，合法更新通过)
 - `TEST-038`: Canonical Source UPDATE 增量合并校验 (严禁非法 source_level 与非时区时间戳)
 - `TEST-039`: Lead 严禁以 CONFIRMED 长期存在 (必须使用 RESOLVE_TO_BENEFIT 转为正规福利)
-- `TEST-040`: 永久唯一 ID (benefit_id/lead_id/source_id/coverage_id/manual_check_id/scan_id) 严格由 Desk 所有与控制
-- `TEST-041`: 到期复查规划覆盖：ACTIVE 且 end_date/next_review_date 为 UNKNOWN 自动纳入 review_items
-- `TEST-042`: SQLite 既有数据库无缝迁移 (actual_checked_at nullable 迁移且不丢弃数据)
-- `TEST-043`: amount 字段严格语义解析与校验 (支持整数/浮点/数字字符串/UNKNOWN，阻断自然语言描述)
+- `TEST-044`: CREATE duplicate resolution UPDATE_EXISTING 真实合并入库 (事实更新/保留 first_seen / 保护 User Benefit State / local_ref 映射)
+- `TEST-045`: Dedup UNKNOWN-safe 合并防护 (UNKNOWN 不覆盖已有明确事实，显式新值安全更新)
+- `TEST-046`: Dedup 目标为 CONFIRMED 时的 Evidence Gate 严格防护
+- `TEST-047`: Initial Baseline / Scan Import 内候选福利之间 (Intra-Package) 查重与合并 (MERGE_LOCAL)
+- `TEST-048`: Package 内部查重合并后 local_ref 交叉引用映射 (Lead 转福利精准解析)
+- `TEST-049`: Package 内部候选福利显式冲突事实检测与结构化告警
+- `TEST-050`: 历史 OPEN + CONFIRMED Lead 数据库兼容性检查与 Context 导出安全跳过
+- `E2E Lifecycles`:
+  - `LIFECYCLE A`: 初始基线全生命周期 (EMPTY -> Export -> DEEP_FULL_SCAN -> READY -> rev=1 -> 二次导入幂等阻断)
+  - `LIFECYCLE B`: 正常基线增量更新周期 (READY -> Export -> FULL_SCAN -> UPDATE 覆盖/线索/福利 -> rev=2 -> 5项负向门禁拦截)
+  - `LIFECYCLE C`: 查重处理生命周期 (READY -> Export -> CREATE 匹配已有福利 -> Preview 查重 -> 用户选择 UPDATE -> 真实合并更新 -> 保持 ID 与用户状态 -> rev+1)
+  - `LIFECYCLE D`: 初始基线 Package 内查重生命周期 (EMPTY -> Export -> DEEP_FULL_SCAN 2条同活动候选 -> Preview 识别 -> MERGE_LOCAL -> 单一福利入库 -> 映射同永久 ID -> READY)
+
 
 

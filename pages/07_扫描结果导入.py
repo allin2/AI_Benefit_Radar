@@ -59,17 +59,34 @@ if uploaded_file is not None:
             if p["duplicates"]:
                 st.warning(f"⚠️ 发现 **{len(p['duplicates'])}** 个疑似重复的 CREATE 候选项：")
                 for dup in p["duplicates"]:
-                    st.markdown(f"**候选 local_ref:** `{dup['local_ref']}` 与已有福利 `[{dup['existing_benefit_id']}] {dup['existing_campaign_name']}` 可能重复")
-                    st.caption(f"匹配原因: {dup['reason']}")
-                    choice = st.radio(
-                        f"处理策略 ({dup['local_ref']})",
-                        [f"更新已有福利 ({dup['existing_benefit_id']})", "仍然创建为新福利", "忽略该项"],
-                        key=f"dedup_choice_{dup['local_ref']}"
-                    )
-                    if "更新已有福利" in choice:
-                        dedup_resolutions[dup["local_ref"]] = f"UPDATE:{dup['existing_benefit_id']}"
-                    elif "忽略该项" in choice:
-                        dedup_resolutions[dup["local_ref"]] = "IGNORE"
+                    if dup.get("is_intra_package"):
+                        target_ref = dup.get("target_local_ref")
+                        st.markdown(f"**候选 local_ref:** `{dup['local_ref']}` 与本次导入中的另一条候选福利 `[{target_ref}] {dup.get('existing_campaign_name')}` 可能重复")
+                        st.caption(f"匹配原因: {dup['reason']}")
+                        if dup.get("has_conflict"):
+                            st.warning(f"⚠️ **存在明确事实冲突:** `{dup.get('conflicts')}`，请核对后再选择合并！")
+                        choice = st.radio(
+                            f"处理策略 ({dup['local_ref']})",
+                            [f"合并到主候选福利 ({target_ref})", "仍然分别创建", "忽略该项"],
+                            key=f"dedup_choice_{dup['local_ref']}"
+                        )
+                        if "合并到主候选福利" in choice:
+                            dedup_resolutions[dup["local_ref"]] = f"MERGE_LOCAL:{target_ref}"
+                        elif "忽略该项" in choice:
+                            dedup_resolutions[dup["local_ref"]] = "IGNORE"
+                    else:
+                        st.markdown(f"**候选 local_ref:** `{dup['local_ref']}` 与已有福利 `[{dup['existing_benefit_id']}] {dup['existing_campaign_name']}` 可能重复")
+                        st.caption(f"匹配原因: {dup['reason']}")
+                        choice = st.radio(
+                            f"处理策略 ({dup['local_ref']})",
+                            [f"更新已有福利 ({dup['existing_benefit_id']})", "仍然创建为新福利", "忽略该项"],
+                            key=f"dedup_choice_{dup['local_ref']}"
+                        )
+                        if "更新已有福利" in choice:
+                            dedup_resolutions[dup["local_ref"]] = f"UPDATE:{dup['existing_benefit_id']}"
+                        elif "忽略该项" in choice:
+                            dedup_resolutions[dup["local_ref"]] = "IGNORE"
+
 
             if p["evidence_warnings"]:
                 st.warning(f"⚠️ 发现 **{len(p['evidence_warnings'])}** 个证据级别异常项：")

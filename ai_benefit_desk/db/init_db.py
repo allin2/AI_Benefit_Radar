@@ -70,10 +70,25 @@ def migrate_db_schema(target_engine):
             conn.commit()
 
 
+def check_legacy_lead_compatibility(target_engine):
+    """Check for legacy OPEN + CONFIRMED leads in the database and report compatibility warnings."""
+    with target_engine.connect() as conn:
+        res = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='leads'"))
+        if not res.fetchone():
+            return []
+        
+        rows = conn.execute(text("SELECT lead_id FROM leads WHERE status = 'OPEN' AND verification_status = 'CONFIRMED'")).fetchall()
+        legacy_lead_ids = [r[0] for r in rows]
+        if legacy_lead_ids:
+            print(f"[COMPATIBILITY WARNING] 发现 {len(legacy_lead_ids)} 条历史 OPEN + CONFIRMED Lead ({', '.join(legacy_lead_ids)})，需要人工处理为正式 Benefit 或降级线索状态。")
+        return legacy_lead_ids
+
+
 def init_db(bind=None):
     target_engine = bind or engine
     Base.metadata.create_all(bind=target_engine)
     migrate_db_schema(target_engine)
+    check_legacy_lead_compatibility(target_engine)
     
     db: Session = SessionLocal(bind=target_engine) if bind else SessionLocal()
     try:
@@ -102,6 +117,7 @@ def init_db(bind=None):
         raise
     finally:
         db.close()
+
 
 
 if __name__ == "__main__":

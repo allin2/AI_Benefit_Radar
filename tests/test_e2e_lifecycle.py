@@ -596,3 +596,307 @@ def test_lifecycle_b_normal_full_scan_update():
         db.close()
 
 
+# =========================================================================
+# LIFECYCLE C — Dedup Resolution Lifecycle
+# =========================================================================
+def test_lifecycle_c_dedup_resolution():
+    """
+    READY Baseline
+    -> existing Benefit BEN-000001
+    -> Export Context
+    -> Scan Import CREATE BNEW-X
+    -> Detect duplicate BEN-000001
+    -> Preview
+    -> User chooses UPDATE_EXISTING
+    -> Commit
+    -> Benefit count unchanged
+    -> BEN-000001 fact updated
+    -> first_seen preserved
+    -> User State preserved
+    -> local_ref BNEW-X maps BEN-000001
+    -> next Context export
+    -> PASS
+    """
+    test_engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    init_db(bind=test_engine)
+    Session = sessionmaker(bind=test_engine)
+    db = Session()
+
+    try:
+        # Pre-seed READY DB
+        b_init = BenefitModel(
+            benefit_id="BEN-000001",
+            vendor="Vendor A",
+            product="Product A",
+            campaign_name="Vendor A Deal",
+            benefit_type="API_CREDITS",
+            benefit_detail="Initial detail 1000",
+            amount="1000",
+            end_date="2026-08-31",
+            first_seen="2026-07-01",
+            last_checked="2026-07-01",
+            official_source="https://vendor-a.com",
+            source_level="S",
+            verification_status="CONFIRMED",
+            status="ACTIVE"
+        )
+        b_init.regions = ["US"]
+        b_init.eligibility_class = ["ALL_USERS"]
+
+        sys_state = db.query(SystemStateModel).filter_by(id=1).first()
+        sys_state.baseline_state = "READY"
+        sys_state.baseline_revision = 1
+
+        db.add(b_init)
+        db.commit()
+
+        # User Benefit State: CLAIMED
+        u_state = UserBenefitStateModel(benefit_id="BEN-000001", action_state="CLAIMED", notes="Claimed by user")
+        db.add(u_state)
+        db.commit()
+
+        # 1. Export Context
+        context_pkg = ExportService.generate_scan_context(db, requested_mode="FULL_SCAN")
+        scan_id = context_pkg.scan.scan_id
+        assert context_pkg.scan.baseline_revision == 1
+
+        # 2. Scan Import with CREATE candidate BNEW-X matching BEN-000001
+        import_data = {
+            "protocol_version": "0.1",
+            "benefit_schema_version": "1.2.1",
+            "package_type": "SCAN_IMPORT",
+            "scan_result": {
+                "scan_id": scan_id,
+                "scan_mode": "FULL_SCAN",
+                "context_baseline_revision": 1,
+                "generated_at": "2026-08-18T19:00:00+08:00",
+                "scan_statuses": ["PUBLIC_COMPLETE", "OVERALL_PARTIAL"],
+                "baseline_action": "UPDATE_EXISTING_BASELINE",
+                "summary_notes": "Lifecycle C Dedup"
+            },
+            "benefit_changes": [
+                {
+                    "operation": "CREATE",
+                    "local_ref": "BNEW-X",
+                    "record": {
+                        "vendor": "Vendor A",
+                        "product": "Product A",
+                        "campaign_name": "Vendor A Deal",
+                        "benefit_type": "API_CREDITS",
+                        "benefit_detail": "Updated detail 2000",
+                        "amount": 2000,
+                        "end_date": "2026-10-31",
+                        "first_seen": "2026-08-18",
+                        "last_checked": "2026-08-18",
+                        "official_source": "https://vendor-a.com",
+                        "source_level": "S",
+                        "verification_status": "CONFIRMED",
+                        "status": "ACTIVE"
+                    },
+                    "evidence": [
+                        {
+                            "url": "https://vendor-a.com",
+                            "source_level": "S",
+                            "source_role": "PRIMARY",
+                            "checked_at": "2026-08-18T18:00:00+08:00"
+                        }
+                    ]
+                }
+            ],
+            "lead_changes": [],
+            "coverage_events": [],
+            "source_updates": [],
+            "manual_check_items": [],
+            "warnings": []
+        }
+        raw_json = dumps_json(import_data)
+
+        # 3. Preview detects duplicate
+        preview = ImportService.parse_and_preview(db, raw_json)
+        assert preview["is_valid"] is True
+        dups = preview["preview"]["duplicates"]
+        assert len(dups) == 1
+        assert dups[0]["existing_benefit_id"] == "BEN-000001"
+
+        # 4. User chooses UPDATE:BEN-000001
+        resolutions = {"BNEW-X": "UPDATE:BEN-000001"}
+        commit_res = ImportService.commit_import(
+            db, preview["import_pkg"], raw_json, dedup_resolutions=resolutions
+        )
+        assert commit_res["success"] is True
+
+        # 5. Check assertions
+        # Total benefit count unchanged
+        assert db.query(BenefitModel).count() == 1
+
+        b_chk = db.query(BenefitModel).filter_by(benefit_id="BEN-000001").first()
+        assert b_chk.amount == "2000"
+        assert b_chk.end_date == "2026-10-31"
+        assert b_chk.first_seen == "2026-07-01"
+
+        # User Benefit State preserved
+        u_chk = db.query(UserBenefitStateModel).filter_by(benefit_id="BEN-000001").first()
+        assert u_chk.action_state == "CLAIMED"
+
+        # local_ref maps to BEN-000001
+        assert commit_res["local_ref_map"]["BNEW-X"] == "BEN-000001"
+
+        # 6. Next context export contains updated facts
+        context_pkg_2 = ExportService.generate_scan_context(db, requested_mode="FULL_SCAN")
+        assert context_pkg_2.scan.baseline_revision == 2
+        assert len(context_pkg_2.benefit_index) == 1
+        assert context_pkg_2.benefit_index[0].benefit_id == "BEN-000001"
+
+    finally:
+        db.close()
+
+
+# =========================================================================
+# LIFECYCLE D — Initial Baseline Package Dedup
+# =========================================================================
+def test_lifecycle_d_initial_baseline_package_dedup():
+    """
+    EMPTY
+    -> Export Context
+    -> DEEP_FULL_SCAN Import
+    -> two duplicate CREATE candidates
+    -> Preview detects duplicate
+    -> user merge
+    -> Commit
+    -> one permanent Benefit
+    -> both local_refs resolve same benefit_id
+    -> READY
+    -> Export Context
+    -> no duplicate Benefit identity
+    """
+    test_engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    init_db(bind=test_engine)
+    Session = sessionmaker(bind=test_engine)
+    db = Session()
+
+    try:
+        # 1. State: EMPTY, rev = 0
+        sys_state = db.query(SystemStateModel).filter_by(id=1).first()
+        assert sys_state.baseline_state == "EMPTY"
+        assert sys_state.baseline_revision == 0
+
+        # 2. Export Context
+        context_pkg = ExportService.generate_scan_context(db, requested_mode="DEEP_FULL_SCAN")
+        scan_id = context_pkg.scan.scan_id
+
+        # 3. DEEP_FULL_SCAN Import with 2 duplicate CREATE candidates
+        import_data = {
+            "protocol_version": "0.1",
+            "benefit_schema_version": "1.2.1",
+            "package_type": "SCAN_IMPORT",
+            "scan_result": {
+                "scan_id": scan_id,
+                "scan_mode": "DEEP_FULL_SCAN",
+                "context_baseline_revision": 0,
+                "generated_at": "2026-08-18T18:00:00+08:00",
+                "scan_statuses": ["PUBLIC_COMPLETE", "OVERALL_PARTIAL"],
+                "baseline_action": "BUILD_INITIAL_BASELINE",
+                "summary_notes": "Lifecycle D Initial Package Dedup"
+            },
+            "benefit_changes": [
+                {
+                    "operation": "CREATE",
+                    "local_ref": "BNEW-001",
+                    "record": {
+                        "vendor": "Vendor X",
+                        "product": "Product X",
+                        "campaign_name": "Campaign X",
+                        "benefit_type": "FREE_ACCESS",
+                        "benefit_detail": "Official EN page",
+                        "amount": 1000,
+                        "first_seen": "2026-08-18",
+                        "last_checked": "2026-08-18",
+                        "official_source": "https://vendor-x.com/en",
+                        "source_level": "S",
+                        "verification_status": "CONFIRMED",
+                        "status": "ACTIVE"
+                    },
+                    "evidence": [
+                        {
+                            "url": "https://vendor-x.com/en",
+                            "source_level": "S",
+                            "source_role": "PRIMARY",
+                            "checked_at": "2026-08-18T18:00:00+08:00"
+                        }
+                    ]
+                },
+                {
+                    "operation": "CREATE",
+                    "local_ref": "BNEW-002",
+                    "record": {
+                        "vendor": "Vendor X",
+                        "product": "Product X",
+                        "campaign_name": "Campaign X",
+                        "benefit_type": "FREE_ACCESS",
+                        "benefit_detail": "Official CN page",
+                        "amount": 1000,
+                        "first_seen": "2026-08-18",
+                        "last_checked": "2026-08-18",
+                        "official_source": "https://vendor-x.com/cn",
+                        "source_level": "S",
+                        "verification_status": "CONFIRMED",
+                        "status": "ACTIVE"
+                    },
+                    "evidence": [
+                        {
+                            "url": "https://vendor-x.com/cn",
+                            "source_level": "S",
+                            "source_role": "PRIMARY",
+                            "checked_at": "2026-08-18T18:00:00+08:00"
+                        }
+                    ]
+                }
+            ],
+            "lead_changes": [],
+            "coverage_events": [],
+            "source_updates": [],
+            "manual_check_items": [],
+            "warnings": []
+        }
+        raw_json = dumps_json(import_data)
+
+        # 4. Preview & detect intra-package duplicate
+        preview = ImportService.parse_and_preview(db, raw_json)
+        assert preview["is_valid"] is True
+        dups = preview["preview"]["duplicates"]
+        assert len(dups) == 1
+        assert dups[0]["is_intra_package"] is True
+        assert dups[0]["local_ref"] == "BNEW-002"
+        assert dups[0]["target_local_ref"] == "BNEW-001"
+
+        # 5. User chooses MERGE_LOCAL:BNEW-001
+        resolutions = {"BNEW-002": "MERGE_LOCAL:BNEW-001"}
+        commit_res = ImportService.commit_import(
+            db, preview["import_pkg"], raw_json, dedup_resolutions=resolutions
+        )
+        assert commit_res["success"] is True
+
+        # 6. Verify single permanent Benefit created
+        assert db.query(BenefitModel).count() == 1
+        b_rec = db.query(BenefitModel).first()
+        assert b_rec is not None
+
+        # Both local_refs resolve to the same benefit_id
+        assert commit_res["local_ref_map"]["BNEW-001"] == b_rec.benefit_id
+        assert commit_res["local_ref_map"]["BNEW-002"] == b_rec.benefit_id
+
+        # 7. State = READY, rev = 1
+        sys_state = db.query(SystemStateModel).filter_by(id=1).first()
+        assert sys_state.baseline_state == "READY"
+        assert sys_state.baseline_revision == 1
+
+        # 8. Next Export Context has only 1 benefit identity
+        context_pkg_2 = ExportService.generate_scan_context(db, requested_mode="FULL_SCAN")
+        assert len(context_pkg_2.benefit_index) == 1
+        assert context_pkg_2.benefit_index[0].benefit_id == b_rec.benefit_id
+
+    finally:
+        db.close()
+
+
+

@@ -7,6 +7,7 @@ from ai_benefit_desk.db.models import (
     BenefitModel, LeadModel, CoverageHistoryModel, CanonicalSourceModel,
     UserBenefitStateModel, ManualCheckModel, ScanModel, ImportAuditModel, SystemStateModel
 )
+from ai_benefit_desk.schemas.benefit_models import BenefitRecord
 from ai_benefit_desk.schemas.protocol_models import ScanImportPackage, WarningItem
 from ai_benefit_desk.services.validation_service import ValidationService, ValidationResult
 from ai_benefit_desk.services.dedup_service import DedupService
@@ -173,16 +174,40 @@ class ImportService:
             if scan_rec.baseline_revision_at_export != import_pkg.scan_result.context_baseline_revision:
                 raise ValueError(f"扫描导出时的基线版本 ({scan_rec.baseline_revision_at_export}) 与导入包声明的上下文基线版本 ({import_pkg.scan_result.context_baseline_revision}) 不一致。")
 
+            # 2.5 Validate dedup resolutions (cycle detection)
+            DedupService.validate_dedup_resolutions(dedup_resolutions, import_pkg.benefit_changes)
+
+            # Handle intra-package candidate merges (MERGE_LOCAL)
+            bop_by_ref = {bop.local_ref: bop for bop in import_pkg.benefit_changes if bop.operation == "CREATE" and bop.local_ref}
+            for bop in import_pkg.benefit_changes:
+                if bop.operation == "CREATE" and bop.local_ref:
+                    res = dedup_resolutions.get(bop.local_ref)
+                    if res and res.startswith("MERGE_LOCAL:"):
+                        target_ref = res.split(":", 1)[1]
+                        target_bop = bop_by_ref.get(target_ref)
+                        if target_bop and target_bop.record and bop.record:
+                            # Merge secondary facts and evidence into target primary candidate
+                            target_bop.record = DedupService.merge_intra_package_candidates(target_bop.record, bop.record)
+                            target_bop.evidence.extend(bop.evidence)
+
             # 3. Pre-generate permanent IDs for local_refs
             for bop in import_pkg.benefit_changes:
                 if bop.operation == "CREATE" and bop.local_ref:
                     res = dedup_resolutions.get(bop.local_ref)
-                    if res == "IGNORE":
+                    if res == "IGNORE" or (res and res.startswith("MERGE_LOCAL:")):
                         continue
                     elif res and res.startswith("UPDATE:"):
                         local_ref_to_id[bop.local_ref] = res.split(":", 1)[1]
                     else:
                         local_ref_to_id[bop.local_ref] = IdService.generate_benefit_id(db)
+
+            # Map secondaries in MERGE_LOCAL to target's permanent ID
+            for bop in import_pkg.benefit_changes:
+                if bop.operation == "CREATE" and bop.local_ref:
+                    res = dedup_resolutions.get(bop.local_ref)
+                    if res and res.startswith("MERGE_LOCAL:"):
+                        target_ref = res.split(":", 1)[1]
+                        local_ref_to_id[bop.local_ref] = local_ref_to_id.get(target_ref, "")
 
             for lop in import_pkg.lead_changes:
                 if lop.operation == "CREATE" and lop.local_ref:
@@ -201,10 +226,83 @@ class ImportService:
 
             for bop in import_pkg.benefit_changes:
                 res = dedup_resolutions.get(bop.local_ref)
-                if res == "IGNORE":
+                if res == "IGNORE" or (res and res.startswith("MERGE_LOCAL:")):
                     continue
 
-                if bop.operation == "CREATE" and not (res and res.startswith("UPDATE:")):
+                if bop.operation == "CREATE" and (res and res.startswith("UPDATE:")):
+                    target_b_id = res.split(":", 1)[1]
+                    existing_b = db.query(BenefitModel).filter_by(benefit_id=target_b_id).first()
+                    if not existing_b:
+                        raise ValueError(f"要更新的已有福利不存在: {target_b_id}")
+
+                    # Build dedup update patch (UNKNOWN-safe)
+                    patch_dict = DedupService.build_dedup_update_patch(existing_b, bop.record)
+
+                    # Merged candidate validation
+                    existing_dict = {
+                        "benefit_id": existing_b.benefit_id,
+                        "vendor": existing_b.vendor,
+                        "product": existing_b.product,
+                        "linked_vendor": existing_b.linked_vendor or "UNKNOWN",
+                        "linked_product": existing_b.linked_product or "UNKNOWN",
+                        "campaign_name": existing_b.campaign_name,
+                        "benefit_type": existing_b.benefit_type,
+                        "benefit_detail": existing_b.benefit_detail,
+                        "linked_benefit_detail": existing_b.linked_benefit_detail or "UNKNOWN",
+                        "wallet": existing_b.wallet or "UNKNOWN",
+                        "amount": existing_b.amount or "UNKNOWN",
+                        "unit": existing_b.unit or "UNKNOWN",
+                        "reset_policy": existing_b.reset_policy or "UNKNOWN",
+                        "grant_method": existing_b.grant_method or "UNKNOWN",
+                        "regions": existing_b.regions,
+                        "eligibility": existing_b.eligibility or "UNKNOWN",
+                        "eligibility_class": existing_b.eligibility_class,
+                        "start_date": existing_b.start_date or "UNKNOWN",
+                        "end_date": existing_b.end_date or "UNKNOWN",
+                        "first_seen": existing_b.first_seen,
+                        "last_checked": existing_b.last_checked,
+                        "next_review_date": existing_b.next_review_date or "UNKNOWN",
+                        "claim_method": existing_b.claim_method or "UNKNOWN",
+                        "credit_card_required": existing_b.credit_card_required or "UNKNOWN",
+                        "verification_required": existing_b.verification_required or "UNKNOWN",
+                        "official_source": existing_b.official_source,
+                        "source_level": existing_b.source_level,
+                        "verification_status": existing_b.verification_status,
+                        "status": existing_b.status,
+                        "change_type": existing_b.change_type or "UNKNOWN",
+                        "account_risk": existing_b.account_risk or "NONE",
+                        "region_risk": existing_b.region_risk or "UNKNOWN",
+                        "compliance_risk": existing_b.compliance_risk or "NONE",
+                        "notes": existing_b.notes or ""
+                    }
+                    candidate_dict = existing_dict.copy()
+                    candidate_dict.update(patch_dict)
+
+                    BenefitRecord.model_validate(candidate_dict)
+
+                    # Evidence Gate check
+                    if candidate_dict.get("verification_status") == "CONFIRMED":
+                        eff_src_lvl = candidate_dict.get("source_level")
+                        has_sa = (
+                            eff_src_lvl in ("S", "A") or
+                            any(e.source_level in ("S", "A") for e in bop.evidence)
+                        )
+                        if not has_sa and not user_override_evidence:
+                            raise ValueError(f"确认级别与证据不匹配: 更新福利 [{target_b_id}] 状态为 CONFIRMED，但缺乏 S 或 A 级第一方证据")
+
+                    # Apply patch_dict
+                    for k, v in patch_dict.items():
+                        if k == "regions":
+                            existing_b.regions = v
+                        elif k == "eligibility_class":
+                            existing_b.eligibility_class = v
+                        elif hasattr(existing_b, k) and k not in ("id", "benefit_id", "first_seen", "created_at"):
+                            setattr(existing_b, k, v)
+
+                    local_ref_to_id[bop.local_ref] = existing_b.benefit_id
+                    db.flush()
+
+                elif bop.operation == "CREATE":
                     rec = bop.record
                     effective_change_type = rec.change_type
                     if is_initial_baseline and rec.change_type == "NEW":
@@ -249,8 +347,8 @@ class ImportService:
                     b_model.eligibility_class = rec.eligibility_class
                     db.add(b_model)
 
-                elif bop.operation == "UPDATE" or (res and res.startswith("UPDATE:")):
-                    target_b_id = bop.benefit_id if bop.operation != "CREATE" else res.split(":", 1)[1]
+                elif bop.operation == "UPDATE":
+                    target_b_id = bop.benefit_id
                     existing_b = db.query(BenefitModel).filter_by(benefit_id=target_b_id).first()
                     if not existing_b:
                         raise ValueError(f"要更新的福利不存在: {target_b_id}")
@@ -262,7 +360,7 @@ class ImportService:
                             existing_b.regions = v
                         elif k == "eligibility_class":
                             existing_b.eligibility_class = v
-                        elif hasattr(existing_b, k) and k not in ("id", "benefit_id", "created_at"):
+                        elif hasattr(existing_b, k) and k not in ("id", "benefit_id", "first_seen", "created_at"):
                             setattr(existing_b, k, v)
 
                     if bop.change_type:
@@ -281,6 +379,7 @@ class ImportService:
                         existing_b.next_review_date = bop.next_review_date
                     existing_b.change_type = "NO_CHANGE"
                     db.flush()
+
 
             # 5. Process Lead Changes
             for lop in import_pkg.lead_changes:

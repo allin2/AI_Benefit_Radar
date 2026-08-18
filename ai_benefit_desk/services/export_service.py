@@ -130,29 +130,34 @@ class ExportService:
                 )
 
 
-        # 5. Open Leads
+        # 5. Open Leads (Filter out legacy OPEN + CONFIRMED leads gracefully)
         leads_query = db.query(LeadModel).filter_by(status="OPEN")
         if vendor_filter:
             leads_query = leads_query.filter(LeadModel.vendor == vendor_filter)
-        open_leads = [
-            LeadRecord(
-                lead_id=l.lead_id,
-                vendor=l.vendor,
-                product=l.product,
-                lead_summary=l.lead_summary,
-                verification_status=l.verification_status,
-                source_level=l.source_level,
-                regions=l.regions,
-                missing_evidence=l.missing_evidence,
-                first_seen=l.first_seen,
-                last_checked=l.last_checked,
-                next_review_date=l.next_review_date,
-                status=l.status,
-                resolved_benefit_id=l.resolved_benefit_id,
-                rejection_reason=l.rejection_reason
+        open_leads = []
+        for l in leads_query.all():
+            if l.verification_status == "CONFIRMED":
+                # Legacy invalid state: skip export to prevent validation error
+                continue
+            open_leads.append(
+                LeadRecord(
+                    lead_id=l.lead_id,
+                    vendor=l.vendor,
+                    product=l.product,
+                    lead_summary=l.lead_summary,
+                    verification_status=l.verification_status,
+                    source_level=l.source_level,
+                    regions=l.regions,
+                    missing_evidence=l.missing_evidence,
+                    first_seen=l.first_seen,
+                    last_checked=l.last_checked,
+                    next_review_date=l.next_review_date,
+                    status=l.status,
+                    resolved_benefit_id=l.resolved_benefit_id,
+                    rejection_reason=l.rejection_reason
+                )
             )
-            for l in leads_query.all()
-        ]
+
 
         # 6. Latest Coverage (1 per vendor + product + surface + region)
         cov_query = db.query(CoverageHistoryModel).order_by(CoverageHistoryModel.id.desc())
