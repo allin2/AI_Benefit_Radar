@@ -69,8 +69,7 @@ def test_lifecycle_a_initial_baseline():
                 "context_baseline_revision": 0,
                 "generated_at": "2026-08-18T18:25:00+08:00",
                 "scan_statuses": ["PUBLIC_COMPLETE", "OVERALL_PARTIAL"],
-                "baseline_action": "BUILD_INITIAL_BASELINE",
-                "summary_notes": "Lifecycle A initial baseline build"
+                "baseline_action": "BUILD_INITIAL_BASELINE"
             },
             "benefit_changes": [
                 {
@@ -161,8 +160,7 @@ def test_lifecycle_a_initial_baseline():
                     "channel": "IDE",
                     "reason": "检查 IDE 弹窗中是否存在限时积分领取入口",
                     "priority": "MEDIUM",
-                    "suggested_action": "打开 IDE 登录查看活动弹窗",
-                    "status": "OPEN"
+                    "suggested_action": "打开 IDE 登录查看活动弹窗"
                 }
             ],
             "warnings": []
@@ -329,8 +327,7 @@ def test_lifecycle_b_normal_full_scan_update():
                 "context_baseline_revision": 1,
                 "generated_at": "2026-08-18T19:00:00+08:00",
                 "scan_statuses": ["PUBLIC_COMPLETE", "OVERALL_PARTIAL"],
-                "baseline_action": "UPDATE_EXISTING_BASELINE",
-                "summary_notes": "Lifecycle B valid update"
+                "baseline_action": "UPDATE_EXISTING_BASELINE"
             },
             "benefit_changes": [
                 {
@@ -422,8 +419,7 @@ def test_lifecycle_b_normal_full_scan_update():
                 "context_baseline_revision": 2,
                 "generated_at": "2026-08-18T19:30:00+08:00",
                 "scan_statuses": ["PUBLIC_COMPLETE"],
-                "baseline_action": "UPDATE_EXISTING_BASELINE",
-                "summary_notes": "Neg test"
+                "baseline_action": "UPDATE_EXISTING_BASELINE"
             },
             "benefit_changes": [{
                 "operation": "UPDATE",
@@ -450,8 +446,7 @@ def test_lifecycle_b_normal_full_scan_update():
                 "context_baseline_revision": 2,
                 "generated_at": "2026-08-18T19:30:00+08:00",
                 "scan_statuses": ["PUBLIC_COMPLETE"],
-                "baseline_action": "UPDATE_EXISTING_BASELINE",
-                "summary_notes": "Neg test"
+                "baseline_action": "UPDATE_EXISTING_BASELINE"
             },
             "benefit_changes": [],
             "lead_changes": [{
@@ -478,8 +473,7 @@ def test_lifecycle_b_normal_full_scan_update():
                 "context_baseline_revision": 2,
                 "generated_at": "2026-08-18T19:30:00+08:00",
                 "scan_statuses": ["PUBLIC_COMPLETE"],
-                "baseline_action": "UPDATE_EXISTING_BASELINE",
-                "summary_notes": "Neg test"
+                "baseline_action": "UPDATE_EXISTING_BASELINE"
             },
             "benefit_changes": [],
             "lead_changes": [],
@@ -506,8 +500,7 @@ def test_lifecycle_b_normal_full_scan_update():
                 "context_baseline_revision": 2,
                 "generated_at": "2026-08-18T19:30:00+08:00",
                 "scan_statuses": ["PUBLIC_COMPLETE"],
-                "baseline_action": "UPDATE_EXISTING_BASELINE",
-                "summary_notes": "Neg test"
+                "baseline_action": "UPDATE_EXISTING_BASELINE"
             },
             "benefit_changes": [],
             "lead_changes": [{
@@ -563,8 +556,7 @@ def test_lifecycle_b_normal_full_scan_update():
                 "context_baseline_revision": 2,
                 "generated_at": "2026-08-18T19:30:00+08:00",
                 "scan_statuses": ["PUBLIC_COMPLETE"],
-                "baseline_action": "UPDATE_EXISTING_BASELINE",
-                "summary_notes": "Neg test"
+                "baseline_action": "UPDATE_EXISTING_BASELINE"
             },
             "benefit_changes": [],
             "lead_changes": [],
@@ -665,8 +657,7 @@ def test_lifecycle_c_dedup_resolution():
                 "context_baseline_revision": 1,
                 "generated_at": "2026-08-18T19:00:00+08:00",
                 "scan_statuses": ["PUBLIC_COMPLETE", "OVERALL_PARTIAL"],
-                "baseline_action": "UPDATE_EXISTING_BASELINE",
-                "summary_notes": "Lifecycle C Dedup"
+                "baseline_action": "UPDATE_EXISTING_BASELINE"
             },
             "benefit_changes": [
                 {
@@ -789,8 +780,7 @@ def test_lifecycle_d_initial_baseline_package_dedup():
                 "context_baseline_revision": 0,
                 "generated_at": "2026-08-18T18:00:00+08:00",
                 "scan_statuses": ["PUBLIC_COMPLETE", "OVERALL_PARTIAL"],
-                "baseline_action": "BUILD_INITIAL_BASELINE",
-                "summary_notes": "Lifecycle D Initial Package Dedup"
+                "baseline_action": "BUILD_INITIAL_BASELINE"
             },
             "benefit_changes": [
                 {
@@ -996,8 +986,7 @@ def test_lifecycle_e_validation_integrity():
                 "context_baseline_revision": 1,
                 "baseline_action": "UPDATE_EXISTING_BASELINE",
                 "scan_mode": "FULL_SCAN",
-                "scan_statuses": ["PUBLIC_COMPLETE"],
-                "summary_notes": "Neg 1"
+                "scan_statuses": ["PUBLIC_COMPLETE"]
             },
             "benefit_changes": [
                 {
@@ -1025,8 +1014,7 @@ def test_lifecycle_e_validation_integrity():
                 "context_baseline_revision": 1,
                 "baseline_action": "UPDATE_EXISTING_BASELINE",
                 "scan_mode": "FULL_SCAN",
-                "scan_statuses": ["PUBLIC_COMPLETE"],
-                "summary_notes": "Neg 2"
+                "scan_statuses": ["PUBLIC_COMPLETE"]
             },
             "benefit_changes": [],
             "lead_changes": [
@@ -1061,8 +1049,7 @@ def test_lifecycle_e_validation_integrity():
                 "context_baseline_revision": 1,
                 "baseline_action": "UPDATE_EXISTING_BASELINE",
                 "scan_mode": "FULL_SCAN",
-                "scan_statuses": ["PUBLIC_COMPLETE"],
-                "summary_notes": "Neg 3"
+                "scan_statuses": ["PUBLIC_COMPLETE"]
             },
             "benefit_changes": [],
             "lead_changes": [
@@ -1090,8 +1077,7 @@ def test_lifecycle_e_validation_integrity():
                 "context_baseline_revision": 1,
                 "baseline_action": "UPDATE_EXISTING_BASELINE",
                 "scan_mode": "FULL_SCAN",
-                "scan_statuses": ["PUBLIC_COMPLETE"],
-                "summary_notes": "Neg 4"
+                "scan_statuses": ["PUBLIC_COMPLETE"]
             },
             "benefit_changes": [],
             "lead_changes": [],
@@ -1119,8 +1105,7 @@ def test_lifecycle_e_validation_integrity():
                 "context_baseline_revision": 1,
                 "baseline_action": "UPDATE_EXISTING_BASELINE",
                 "scan_mode": "FULL_SCAN",
-                "scan_statuses": ["PUBLIC_COMPLETE"],
-                "summary_notes": "Neg 5"
+                "scan_statuses": ["PUBLIC_COMPLETE"]
             },
             "benefit_changes": [
                 {
@@ -1168,8 +1153,7 @@ def test_lifecycle_e_validation_integrity():
                 "context_baseline_revision": 1,
                 "baseline_action": "UPDATE_EXISTING_BASELINE",
                 "scan_mode": "FULL_SCAN",
-                "scan_statuses": ["PUBLIC_COMPLETE"],
-                "summary_notes": "Neg 6"
+                "scan_statuses": ["PUBLIC_COMPLETE"]
             },
             "benefit_changes": [
                 {
@@ -1241,8 +1225,7 @@ def test_lifecycle_e_validation_integrity():
                 "context_baseline_revision": 1,
                 "baseline_action": "UPDATE_EXISTING_BASELINE",
                 "scan_mode": "FULL_SCAN",
-                "scan_statuses": ["PUBLIC_COMPLETE"],
-                "summary_notes": "Positive Update Lifecycle"
+                "scan_statuses": ["PUBLIC_COMPLETE"]
             },
             "benefit_changes": [
                 {

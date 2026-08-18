@@ -1,5 +1,5 @@
-from typing import List, Optional, Any, Dict, Literal
-from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
+from typing import List, Optional, Any, Dict, Literal, Union, Annotated
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator, TypeAdapter
 from ai_benefit_desk.schemas.benefit_models import BenefitRecord, VALID_BENEFIT_TYPES, VALID_CHANGE_TYPES
 from ai_benefit_desk.utils.date_utils import is_valid_date_or_unknown, is_valid_timezone_iso8601
 
@@ -469,7 +469,6 @@ class ScanResultMetadata(BaseModel):
     generated_at: str
     scan_statuses: List[str]
     baseline_action: str = "UPDATE_EXISTING_BASELINE"
-    summary_notes: Optional[str] = ""
 
     @field_validator("generated_at")
     @classmethod
@@ -507,384 +506,316 @@ class ScanResultMetadata(BaseModel):
             raise ValueError(f"Invalid baseline_action: {val}")
         return val
 
-# Benefit Operations
-class BenefitChangeOperation(BaseModel):
+# ==========================================
+# 6. Benefit Operations (Discriminated Union)
+# ==========================================
+
+class BenefitCreateOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    operation: str
-    local_ref: Optional[str] = None
-    benefit_id: Optional[str] = None
-    record: Optional[BenefitRecord] = None
-    change_type: Optional[str] = None
-    patch: Optional[Dict[str, Any]] = None
-    last_checked: Optional[str] = None
-    next_review_date: Optional[str] = None
+    operation: Literal["CREATE"] = "CREATE"
+    local_ref: str
+    record: BenefitRecord
     evidence: List[EvidenceItem] = Field(default_factory=list)
 
-    @field_validator("operation")
-    @classmethod
-    def validate_operation(cls, v: str) -> str:
-        val = v.upper()
-        if val not in VALID_BENEFIT_OPERATIONS:
-            raise ValueError(f"Invalid benefit operation: {val}")
-        return val
+    @model_validator(mode="after")
+    def validate_create(self) -> "BenefitCreateOperation":
+        if self.record.benefit_id is not None:
+            raise ValueError("新福利记录在 CREATE 时 record.benefit_id 必须为 null，永久 ID 由 Benefit Desk 分配")
+        return self
 
-    @field_validator("last_checked", "next_review_date")
+class BenefitUpdateOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation: Literal["UPDATE"] = "UPDATE"
+    benefit_id: str
+    change_type: Optional[str] = None
+    patch: Dict[str, Any]
+    evidence: List[EvidenceItem] = Field(default_factory=list)
+
+    @field_validator("change_type")
     @classmethod
-    def validate_dates(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and v != "":
-            if not is_valid_date_or_unknown(v):
-                raise ValueError(f"Invalid date format (must be YYYY-MM-DD or UNKNOWN): {v}")
+    def validate_change_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            val = v.upper()
+            if val not in VALID_CHANGE_TYPES:
+                raise ValueError(f"Invalid change_type: {val}")
+            return val
         return v
 
     @model_validator(mode="after")
-    def validate_benefit_operation_contract(self) -> "BenefitChangeOperation":
-        op = self.operation.upper()
-        if op == "CREATE":
-            if not self.local_ref:
-                raise ValueError("Benefit CREATE 必须提供 local_ref")
-            if not self.record:
-                raise ValueError("Benefit CREATE 必须提供 record 对象")
-            if self.record.benefit_id is not None:
-                raise ValueError("新福利记录在 CREATE 时 benefit_id 必须为 null，永久 ID 由 Benefit Desk 分配")
-            # Forbidden fields for CREATE
-            if self.benefit_id is not None:
-                raise ValueError("Benefit CREATE 操作禁止提供顶层 benefit_id")
-            if self.change_type is not None:
-                raise ValueError("Benefit CREATE 操作禁止提供顶层 change_type")
-            if self.patch is not None:
-                raise ValueError("Benefit CREATE 操作禁止提供 patch")
-            if self.last_checked is not None:
-                raise ValueError("Benefit CREATE 操作禁止提供顶层 last_checked")
-            if self.next_review_date is not None:
-                raise ValueError("Benefit CREATE 操作禁止提供顶层 next_review_date")
-
-        elif op == "UPDATE":
-            if not self.benefit_id:
-                raise ValueError("Benefit UPDATE 必须提供 benefit_id")
-            if self.change_type:
-                if self.change_type.upper() not in VALID_CHANGE_TYPES:
-                    raise ValueError(f"Invalid change_type: {self.change_type}")
-            if self.patch is None or not isinstance(self.patch, dict) or not self.patch:
-                raise ValueError("Benefit UPDATE 必须提供非空的 patch 字典")
-            if "benefit_id" in self.patch:
-                raise ValueError("Benefit UPDATE patch 禁止包含 benefit_id")
-            # Forbidden fields for UPDATE
-            if self.local_ref is not None:
-                raise ValueError("Benefit UPDATE 操作禁止提供 local_ref")
-            if self.record is not None:
-                raise ValueError("Benefit UPDATE 操作禁止提供 record 对象")
-            if self.last_checked is not None:
-                raise ValueError("Benefit UPDATE 操作禁止提供顶层 last_checked (应在 patch 内更新)")
-            if self.next_review_date is not None:
-                raise ValueError("Benefit UPDATE 操作禁止提供顶层 next_review_date (应在 patch 内更新)")
-
-        elif op == "CONFIRM_NO_CHANGE":
-            if not self.benefit_id:
-                raise ValueError("Benefit CONFIRM_NO_CHANGE 必须提供 benefit_id")
-            if not self.last_checked:
-                raise ValueError("Benefit CONFIRM_NO_CHANGE 必须提供复核日期 (last_checked)")
-            if not is_valid_date_or_unknown(self.last_checked):
-                raise ValueError(f"Invalid last_checked date format: {self.last_checked}")
-            if not self.next_review_date:
-                raise ValueError("Benefit CONFIRM_NO_CHANGE 必须提供下次复查日期 (next_review_date)")
-            if not is_valid_date_or_unknown(self.next_review_date):
-                raise ValueError(f"Invalid next_review_date date format: {self.next_review_date}")
-            # Forbidden fields for CONFIRM_NO_CHANGE
-            if self.local_ref is not None:
-                raise ValueError("Benefit CONFIRM_NO_CHANGE 操作禁止提供 local_ref")
-            if self.record is not None:
-                raise ValueError("Benefit CONFIRM_NO_CHANGE 操作禁止提供 record 对象")
-            if self.patch is not None:
-                raise ValueError("Benefit CONFIRM_NO_CHANGE 操作禁止提供 patch")
-            if self.change_type is not None:
-                raise ValueError("Benefit CONFIRM_NO_CHANGE 操作禁止提供 change_type")
+    def validate_update(self) -> "BenefitUpdateOperation":
+        if not self.patch:
+            raise ValueError("Benefit UPDATE 必须提供非空的 patch 字典")
+        if "benefit_id" in self.patch:
+            raise ValueError("Benefit UPDATE patch 禁止修改 benefit_id")
         return self
 
-# Lead Operations
-class LeadChangeOperation(BaseModel):
+class BenefitConfirmNoChangeOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    operation: str
-    local_ref: Optional[str] = None
-    lead_id: Optional[str] = None
-    
-    # Flat Lead attributes for CREATE
-    vendor: Optional[str] = None
-    product: Optional[str] = None
-    lead_summary: Optional[str] = None
-    verification_status: Optional[str] = None
-    source_level: Optional[str] = None
-    regions: Optional[List[str]] = None
-    missing_evidence: Optional[str] = None
-    first_seen: Optional[str] = None
-    last_checked: Optional[str] = None
-    next_review_date: Optional[str] = None
-    status: Optional[str] = None
-    
-    # Fields for UPDATE
-    patch: Optional[Dict[str, Any]] = None
-    
-    # Fields for RESOLVE_TO_BENEFIT
-    target_benefit_ref: Optional[str] = None
-    target_benefit_id: Optional[str] = None
-    
-    # Fields for REJECT
-    reason: Optional[str] = None
-    rejection_reason: Optional[str] = None
-    checked_at: Optional[str] = None
-    
+    operation: Literal["CONFIRM_NO_CHANGE"] = "CONFIRM_NO_CHANGE"
+    benefit_id: str
+    last_checked: str
+    next_review_date: str
     evidence: List[EvidenceItem] = Field(default_factory=list)
 
-    @field_validator("operation")
+    @field_validator("last_checked", "next_review_date")
     @classmethod
-    def validate_operation(cls, v: str) -> str:
-        val = v.upper()
-        if val not in VALID_LEAD_OPERATIONS:
-            raise ValueError(f"Invalid lead operation: {val}")
-        return val
+    def validate_dates(cls, v: str) -> str:
+        if not is_valid_date_or_unknown(v):
+            raise ValueError(f"Invalid date format (must be YYYY-MM-DD or UNKNOWN): {v}")
+        return v
 
-    @model_validator(mode="after")
-    def validate_lead_operation_contract(self) -> "LeadChangeOperation":
-        op = self.operation.upper()
-        if op == "CREATE":
-            # Required fields
-            if not self.local_ref:
-                raise ValueError("Lead CREATE 必须提供 local_ref")
-            if not self.vendor:
-                raise ValueError("Lead CREATE 必须提供 vendor")
-            if not self.product:
-                raise ValueError("Lead CREATE 必须提供 product")
-            if not self.lead_summary:
-                raise ValueError("Lead CREATE 必须提供 lead_summary")
-            if not self.verification_status:
-                raise ValueError("Lead CREATE 必须提供 verification_status")
-            v_stat = self.verification_status.upper()
-            if v_stat == "CONFIRMED":
-                raise ValueError("已确认线索必须通过 RESOLVE_TO_BENEFIT 转为正式福利，不能继续保留为 CONFIRMED Lead。")
-            if v_stat not in VALID_LEAD_VERIFICATION_STATUSES:
-                raise ValueError(f"Invalid verification_status for Lead: {self.verification_status}")
-            self.verification_status = v_stat
+BenefitChangeOperationUnion = Annotated[
+    Union[BenefitCreateOperation, BenefitUpdateOperation, BenefitConfirmNoChangeOperation],
+    Field(discriminator="operation")
+]
 
-            if not self.source_level:
-                raise ValueError("Lead CREATE 必须提供 source_level")
-            s_lvl = self.source_level.upper()
-            if s_lvl not in VALID_SOURCE_LEVELS:
-                raise ValueError(f"Invalid source_level for Lead: {self.source_level}")
-            self.source_level = s_lvl
+class BenefitChangeOperation:
+    """Helper wrapper for BenefitChangeOperationUnion with model_validate support."""
+    _adapter = TypeAdapter(BenefitChangeOperationUnion)
 
-            if self.regions is None:
-                self.regions = ["UNKNOWN"]
-            for r in self.regions:
-                if r not in VALID_REGIONS:
-                    raise ValueError(f"Invalid region: {r}")
+    @classmethod
+    def model_validate(cls, obj: Any) -> BenefitChangeOperationUnion:
+        return cls._adapter.validate_python(obj)
 
-            if self.missing_evidence is None:
-                self.missing_evidence = ""
+# ==========================================
+# 7. Lead Operations (Discriminated Union)
+# ==========================================
 
-            if not self.first_seen:
-                raise ValueError("Lead CREATE 必须提供 first_seen 日期")
-            if not is_valid_date_or_unknown(self.first_seen):
-                raise ValueError(f"Invalid first_seen date format: {self.first_seen}")
-
-            if not self.last_checked:
-                raise ValueError("Lead CREATE 必须提供 last_checked 日期")
-            if not is_valid_date_or_unknown(self.last_checked):
-                raise ValueError(f"Invalid last_checked date format: {self.last_checked}")
-
-            if self.next_review_date is None:
-                self.next_review_date = "UNKNOWN"
-            elif not is_valid_date_or_unknown(self.next_review_date):
-                raise ValueError(f"Invalid next_review_date date format: {self.next_review_date}")
-
-            if self.status is None:
-                self.status = "OPEN"
-            else:
-                stat_val = self.status.upper()
-                if stat_val not in VALID_LEAD_STATUSES:
-                    raise ValueError(f"Invalid lead status: {self.status}")
-                self.status = stat_val
-
-            # Forbidden fields for CREATE
-            if self.lead_id is not None:
-                raise ValueError("新线索必须使用 local_ref，lead_id 由 Benefit Desk 分配")
-            if self.patch is not None:
-                raise ValueError("Lead CREATE 操作禁止提供 patch")
-            if self.target_benefit_ref is not None or self.target_benefit_id is not None:
-                raise ValueError("Lead CREATE 操作禁止提供 target_benefit_ref/target_benefit_id")
-            if self.reason is not None or self.rejection_reason is not None:
-                raise ValueError("Lead CREATE 操作禁止提供 reason")
-            if self.checked_at is not None:
-                raise ValueError("Lead CREATE 操作禁止提供 checked_at")
-
-        elif op == "UPDATE":
-            if not self.lead_id:
-                raise ValueError("Lead UPDATE 必须提供 lead_id")
-            if self.patch is None or not isinstance(self.patch, dict) or not self.patch:
-                raise ValueError("Lead UPDATE 必须提供非空的 patch 字典")
-            if "lead_id" in self.patch:
-                raise ValueError("Lead UPDATE patch 禁止修改 lead_id")
-            # Forbidden fields for UPDATE
-            if self.local_ref is not None:
-                raise ValueError("Lead UPDATE 操作禁止提供 local_ref")
-            if (self.vendor is not None or self.product is not None or self.lead_summary is not None or
-                self.verification_status is not None or self.source_level is not None or
-                self.first_seen is not None or self.last_checked is not None):
-                raise ValueError("Lead UPDATE 操作禁止提供顶层实体字段 (应在 patch 中更新)")
-            if self.target_benefit_ref is not None or self.target_benefit_id is not None:
-                raise ValueError("Lead UPDATE 操作禁止提供 target_benefit_ref/target_benefit_id")
-            if self.reason is not None or self.rejection_reason is not None or self.checked_at is not None:
-                raise ValueError("Lead UPDATE 操作禁止提供驳回字段")
-
-        elif op == "RESOLVE_TO_BENEFIT":
-            if not self.lead_id:
-                raise ValueError("Lead RESOLVE_TO_BENEFIT 必须提供 lead_id")
-            has_ref = bool(self.target_benefit_ref)
-            has_id = bool(self.target_benefit_id)
-            if (has_ref and has_id) or (not has_ref and not has_id):
-                raise ValueError("Lead RESOLVE_TO_BENEFIT 中 target_benefit_ref 与 target_benefit_id 必须且只能二选一")
-            # Forbidden fields for RESOLVE_TO_BENEFIT
-            if self.local_ref is not None:
-                raise ValueError("Lead RESOLVE_TO_BENEFIT 操作禁止提供 local_ref")
-            if self.patch is not None:
-                raise ValueError("Lead RESOLVE_TO_BENEFIT 操作禁止提供 patch")
-            if self.vendor is not None or self.product is not None or self.lead_summary is not None:
-                raise ValueError("Lead RESOLVE_TO_BENEFIT 操作禁止提供顶层实体字段")
-            if self.reason is not None or self.rejection_reason is not None or self.checked_at is not None:
-                raise ValueError("Lead RESOLVE_TO_BENEFIT 操作禁止提供驳回字段")
-
-        elif op == "REJECT":
-            if not self.lead_id:
-                raise ValueError("Lead REJECT 必须提供 lead_id")
-            reason_val = self.reason or self.rejection_reason
-            if not reason_val:
-                raise ValueError("Lead REJECT 必须提供驳回原因 (reason)")
-            self.reason = reason_val
-            if not self.checked_at:
-                raise ValueError("Lead REJECT 必须提供检查时间戳 (checked_at)")
-            if not is_valid_timezone_iso8601(self.checked_at):
-                raise ValueError(f"Lead REJECT checked_at 必须是带时区的 ISO8601 时间戳: {self.checked_at}")
-            # Forbidden fields for REJECT
-            if self.local_ref is not None:
-                raise ValueError("Lead REJECT 操作禁止提供 local_ref")
-            if self.patch is not None:
-                raise ValueError("Lead REJECT 操作禁止提供 patch")
-            if self.target_benefit_ref is not None or self.target_benefit_id is not None:
-                raise ValueError("Lead REJECT 操作禁止提供 target_benefit_ref/target_benefit_id")
-            if self.vendor is not None or self.product is not None or self.lead_summary is not None:
-                raise ValueError("Lead REJECT 操作禁止提供顶层实体字段")
-        return self
-
-# Source Updates
-class SourceUpdateOperation(BaseModel):
+class LeadCreateOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    operation: str
-    local_ref: Optional[str] = None
-    source_id: Optional[str] = None
-    
-    # Flat Source attributes for ADD
-    vendor: Optional[str] = None
-    product: Optional[str] = None
-    surface: Optional[str] = None
-    source_name: Optional[str] = None
-    url: Optional[str] = None
-    source_type: Optional[str] = None
-    source_level: Optional[str] = None
-    status: Optional[str] = None
-    last_verified_at: Optional[str] = None
-    
-    # Fields for UPDATE
-    patch: Optional[Dict[str, Any]] = None
-    
-    # Fields for DEPRECATE
-    reason: Optional[str] = None
+    operation: Literal["CREATE"] = "CREATE"
+    local_ref: str
+    vendor: str
+    product: str
+    lead_summary: str
+    verification_status: str
+    source_level: str
+    regions: List[str] = Field(default_factory=lambda: ["UNKNOWN"])
+    missing_evidence: str = ""
+    first_seen: str
+    last_checked: str
+    next_review_date: str = "UNKNOWN"
+    status: str = "OPEN"
+    evidence: List[EvidenceItem] = Field(default_factory=list)
 
-    @field_validator("operation")
+    @field_validator("verification_status")
     @classmethod
-    def validate_operation(cls, v: str) -> str:
+    def validate_verification_status(cls, v: str) -> str:
         val = v.upper()
-        if val not in VALID_SOURCE_OPERATIONS:
-            raise ValueError(f"Invalid source operation: {val}")
+        if val == "CONFIRMED":
+            raise ValueError("已确认线索必须通过 RESOLVE_TO_BENEFIT 转为正式福利，不能继续保留为 CONFIRMED Lead。")
+        if val not in VALID_LEAD_VERIFICATION_STATUSES:
+            raise ValueError(f"Invalid verification_status for Lead: {val}")
         return val
 
+    @field_validator("source_level")
+    @classmethod
+    def validate_source_level(cls, v: str) -> str:
+        val = v.upper()
+        if val not in VALID_SOURCE_LEVELS:
+            raise ValueError(f"Invalid source_level: {val}")
+        return val
+
+    @field_validator("regions")
+    @classmethod
+    def validate_regions(cls, v: List[str]) -> List[str]:
+        if not v:
+            return ["UNKNOWN"]
+        for r in v:
+            if r not in VALID_REGIONS:
+                raise ValueError(f"Invalid region: {r}")
+        return v
+
+    @field_validator("first_seen", "last_checked", "next_review_date")
+    @classmethod
+    def validate_dates(cls, v: str) -> str:
+        if not is_valid_date_or_unknown(v):
+            raise ValueError(f"Invalid date format (must be YYYY-MM-DD or UNKNOWN): {v}")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        val = v.upper()
+        if val not in VALID_LEAD_STATUSES:
+            raise ValueError(f"Invalid lead status: {val}")
+        return val
+
+class LeadUpdateOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation: Literal["UPDATE"] = "UPDATE"
+    lead_id: str
+    patch: Dict[str, Any]
+    evidence: List[EvidenceItem] = Field(default_factory=list)
+
     @model_validator(mode="after")
-    def validate_source_operation_contract(self) -> "SourceUpdateOperation":
-        op = self.operation.upper()
-        if op == "ADD":
-            if not self.local_ref:
-                raise ValueError("Source ADD 必须提供 local_ref")
-            if not self.vendor:
-                raise ValueError("Source ADD 必须提供 vendor")
-            if not self.product:
-                raise ValueError("Source ADD 必须提供 product")
-            if not self.surface:
-                raise ValueError("Source ADD 必须提供 surface")
-            if not self.source_name:
-                raise ValueError("Source ADD 必须提供 source_name")
-            if not self.url:
-                raise ValueError("Source ADD 必须提供 url")
-            if not self.source_type:
-                raise ValueError("Source ADD 必须提供 source_type")
-            if not self.source_level:
-                raise ValueError("Source ADD 必须提供 source_level")
-            s_lvl = self.source_level.upper()
-            if s_lvl not in VALID_SOURCE_LEVELS:
-                raise ValueError(f"Invalid source_level: {self.source_level}")
-            self.source_level = s_lvl
-
-            if self.status is None:
-                self.status = "ACTIVE"
-            else:
-                stat_val = self.status.upper()
-                if stat_val not in VALID_SOURCE_STATUSES:
-                    raise ValueError(f"Invalid status: {self.status}")
-                self.status = stat_val
-
-            if not self.last_verified_at:
-                raise ValueError("Source ADD 必须提供 last_verified_at 时间戳")
-            if not is_valid_timezone_iso8601(self.last_verified_at):
-                raise ValueError(f"last_verified_at 必须是带时区的 ISO8601 时间戳: {self.last_verified_at}")
-            
-            # Forbidden fields for ADD
-            if self.source_id is not None:
-                raise ValueError("新官方入口必须使用 local_ref，source_id 由 Benefit Desk 分配")
-            if self.patch is not None:
-                raise ValueError("Source ADD 操作禁止提供 patch")
-            if self.reason is not None:
-                raise ValueError("Source ADD 操作禁止提供 reason")
-
-        elif op == "UPDATE":
-            if not self.source_id:
-                raise ValueError("Source UPDATE 必须提供 source_id")
-            if self.patch is None or not isinstance(self.patch, dict) or not self.patch:
-                raise ValueError("Source UPDATE 必须提供非空的 patch 字典")
-            if "source_id" in self.patch:
-                raise ValueError("Source UPDATE patch 禁止修改 source_id")
-            # Forbidden fields for UPDATE
-            if self.local_ref is not None:
-                raise ValueError("Source UPDATE 操作禁止提供 local_ref")
-            if (self.vendor is not None or self.product is not None or self.surface is not None or
-                self.source_name is not None or self.url is not None or self.source_type is not None or
-                self.source_level is not None or self.last_verified_at is not None):
-                raise ValueError("Source UPDATE 操作禁止提供顶层实体字段 (应在 patch 中更新)")
-            if self.reason is not None:
-                raise ValueError("Source UPDATE 操作禁止提供 reason")
-
-        elif op == "DEPRECATE":
-            if not self.source_id:
-                raise ValueError("Source DEPRECATE 必须提供 source_id")
-            if not self.reason:
-                raise ValueError("Source DEPRECATE 必须提供废弃原因 (reason)")
-            if not self.last_verified_at:
-                raise ValueError("Source DEPRECATE 必须提供 last_verified_at 时间戳")
-            if not is_valid_timezone_iso8601(self.last_verified_at):
-                raise ValueError(f"last_verified_at 必须是带时区的 ISO8601 时间戳: {self.last_verified_at}")
-            # Forbidden fields for DEPRECATE
-            if self.local_ref is not None:
-                raise ValueError("Source DEPRECATE 操作禁止提供 local_ref")
-            if self.patch is not None:
-                raise ValueError("Source DEPRECATE 操作禁止提供 patch")
-            if self.vendor is not None or self.product is not None or self.surface is not None:
-                raise ValueError("Source DEPRECATE 操作禁止提供顶层实体字段")
+    def validate_update(self) -> "LeadUpdateOperation":
+        if not self.patch:
+            raise ValueError("Lead UPDATE 必须提供非空的 patch 字典")
+        if "lead_id" in self.patch:
+            raise ValueError("Lead UPDATE patch 禁止修改 lead_id")
         return self
+
+class LeadResolveOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation: Literal["RESOLVE_TO_BENEFIT"] = "RESOLVE_TO_BENEFIT"
+    lead_id: str
+    target_benefit_ref: Optional[str] = None
+    target_benefit_id: Optional[str] = None
+    evidence: List[EvidenceItem] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_resolve(self) -> "LeadResolveOperation":
+        has_ref = bool(self.target_benefit_ref)
+        has_id = bool(self.target_benefit_id)
+        if (has_ref and has_id) or (not has_ref and not has_id):
+            raise ValueError("Lead RESOLVE_TO_BENEFIT 中 target_benefit_ref 与 target_benefit_id 必须且只能二选一")
+        return self
+
+class LeadRejectOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation: Literal["REJECT"] = "REJECT"
+    lead_id: str
+    reason: str
+    checked_at: str
+
+    @field_validator("checked_at")
+    @classmethod
+    def validate_checked_at(cls, v: str) -> str:
+        if not is_valid_timezone_iso8601(v):
+            raise ValueError(f"Lead REJECT checked_at 必须是带时区的 ISO8601 时间戳 (e.g. 2026-08-18T18:00:00+08:00): {v}")
+        return v
+
+LeadChangeOperationUnion = Annotated[
+    Union[LeadCreateOperation, LeadUpdateOperation, LeadResolveOperation, LeadRejectOperation],
+    Field(discriminator="operation")
+]
+
+class LeadChangeOperation:
+    """Helper wrapper for LeadChangeOperationUnion with model_validate support."""
+    _adapter = TypeAdapter(LeadChangeOperationUnion)
+
+    @classmethod
+    def model_validate(cls, obj: Any) -> LeadChangeOperationUnion:
+        return cls._adapter.validate_python(obj)
+
+# ==========================================
+# 8. Source Operations (Discriminated Union)
+# ==========================================
+
+class SourceAddOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation: Literal["ADD"] = "ADD"
+    local_ref: str
+    vendor: str
+    product: str
+    surface: str
+    source_name: str
+    url: str
+    source_type: str
+    source_level: str
+    status: str = "ACTIVE"
+    last_verified_at: str
+
+    @field_validator("source_level")
+    @classmethod
+    def validate_source_level(cls, v: str) -> str:
+        val = v.upper()
+        if val not in VALID_SOURCE_LEVELS:
+            raise ValueError(f"Invalid source_level: {val}")
+        return val
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        val = v.upper()
+        if val not in VALID_SOURCE_STATUSES:
+            raise ValueError(f"Invalid status: {val}")
+        return val
+
+    @field_validator("last_verified_at")
+    @classmethod
+    def validate_last_verified_at(cls, v: str) -> str:
+        if not is_valid_timezone_iso8601(v):
+            raise ValueError(f"last_verified_at 必须是带时区的 ISO8601 时间戳 (e.g. 2026-08-18T19:00:00+08:00): {v}")
+        return v
+
+class SourceUpdateOperationModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation: Literal["UPDATE"] = "UPDATE"
+    source_id: str
+    patch: Dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_update(self) -> "SourceUpdateOperationModel":
+        if not self.patch:
+            raise ValueError("Source UPDATE 必须提供非空的 patch 字典")
+        if "source_id" in self.patch:
+            raise ValueError("Source UPDATE patch 禁止修改 source_id")
+        return self
+
+class SourceDeprecateOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation: Literal["DEPRECATE"] = "DEPRECATE"
+    source_id: str
+    reason: str
+    last_verified_at: str
+
+    @field_validator("last_verified_at")
+    @classmethod
+    def validate_last_verified_at(cls, v: str) -> str:
+        if not is_valid_timezone_iso8601(v):
+            raise ValueError(f"last_verified_at 必须是带时区的 ISO8601 时间戳 (e.g. 2026-08-18T19:00:00+08:00): {v}")
+        return v
+
+SourceUpdateOperationUnion = Annotated[
+    Union[SourceAddOperation, SourceUpdateOperationModel, SourceDeprecateOperation],
+    Field(discriminator="operation")
+]
+
+class SourceUpdateOperation:
+    """Helper wrapper for SourceUpdateOperationUnion with model_validate support."""
+    _adapter = TypeAdapter(SourceUpdateOperationUnion)
+
+    @classmethod
+    def model_validate(cls, obj: Any) -> SourceUpdateOperationUnion:
+        return cls._adapter.validate_python(obj)
+
+# ==========================================
+# 9. Manual Check Import Item
+# ==========================================
+
+class ManualCheckImportItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    local_ref: str
+    vendor: str
+    product: str
+    channel: str
+    reason: str
+    priority: str = "MEDIUM"
+    suggested_action: str
+    related_benefit_id: Optional[str] = None
+    related_lead_id: Optional[str] = None
+
+    @field_validator("channel")
+    @classmethod
+    def validate_channel(cls, v: str) -> str:
+        val = v.upper()
+        if val not in VALID_MANUAL_CHECK_CHANNELS:
+            raise ValueError(f"Invalid channel: {val}")
+        return val
+
+    @field_validator("priority")
+    @classmethod
+    def validate_priority(cls, v: str) -> str:
+        val = v.upper()
+        if val not in VALID_MANUAL_CHECK_PRIORITIES:
+            raise ValueError(f"Invalid priority: {val}")
+        return val
+
+# ==========================================
+# 10. SCAN_IMPORT Package Model
+# ==========================================
 
 class ScanImportPackage(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -892,10 +823,10 @@ class ScanImportPackage(BaseModel):
     benefit_schema_version: str = "1.2.1"
     package_type: Literal["SCAN_IMPORT"] = "SCAN_IMPORT"
     scan_result: ScanResultMetadata
-    benefit_changes: List[BenefitChangeOperation] = Field(default_factory=list)
-    lead_changes: List[LeadChangeOperation] = Field(default_factory=list)
+    benefit_changes: List[BenefitChangeOperationUnion] = Field(default_factory=list)
+    lead_changes: List[LeadChangeOperationUnion] = Field(default_factory=list)
     coverage_events: List[CoverageEventItem] = Field(default_factory=list)
-    source_updates: List[SourceUpdateOperation] = Field(default_factory=list)
-    manual_check_items: List[ManualCheckItem] = Field(default_factory=list)
+    source_updates: List[SourceUpdateOperationUnion] = Field(default_factory=list)
+    manual_check_items: List[ManualCheckImportItem] = Field(default_factory=list)
     warnings: List[WarningItem] = Field(default_factory=list)
 

@@ -11,8 +11,7 @@
       "PUBLIC_COMPLETE",
       "OVERALL_PARTIAL"
     ],
-    "baseline_action": "BUILD_INITIAL_BASELINE",
-    "summary_notes": "首次全量扫描完成"
+    "baseline_action": "BUILD_INITIAL_BASELINE"
   },
   "benefit_changes": [
     {

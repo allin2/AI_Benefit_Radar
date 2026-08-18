@@ -11,8 +11,7 @@
       "PUBLIC_COMPLETE",
       "OVERALL_PARTIAL"
     ],
-    "baseline_action": "UPDATE_EXISTING_BASELINE",
-    "summary_notes": "更新到期时间"
+    "baseline_action": "UPDATE_EXISTING_BASELINE"
   },
   "benefit_changes": [
     {
@@ -30,7 +29,9 @@
           "source_level": "S",
           "source_role": "PRIMARY",
           "checked_at": "2026-08-18T17:20:00+08:00",
-          "supports_fields": ["end_date"]
+          "supports_fields": [
+            "end_date"
+          ]
         }
       ]
     }

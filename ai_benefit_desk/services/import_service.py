@@ -84,7 +84,7 @@ class ImportService:
             "scan_statuses": import_pkg.scan_result.scan_statuses,
             "context_baseline_revision": import_pkg.scan_result.context_baseline_revision,
             "baseline_action": import_pkg.scan_result.baseline_action,
-            "summary_notes": import_pkg.scan_result.summary_notes,
+            "summary_notes": getattr(import_pkg.scan_result, "summary_notes", ""),
             
             # Counts
             "benefit_create_count": len(benefit_creates),
@@ -97,6 +97,7 @@ class ImportService:
             "lead_resolve_count": len(lead_resolves),
             "lead_reject_count": len(lead_rejects),
             
+            "coverage_event_count": len(import_pkg.coverage_events),
             "coverage_recheck_count": len(cov_rechecks),
             "coverage_review_not_due_count": len(cov_review_not_due),
             "coverage_blind_spot_count": len(cov_blind_spots),
@@ -244,7 +245,8 @@ class ImportService:
             is_initial_baseline = (import_pkg.scan_result.baseline_action == "BUILD_INITIAL_BASELINE")
 
             for bop in import_pkg.benefit_changes:
-                res = dedup_resolutions.get(bop.local_ref)
+                lref = getattr(bop, "local_ref", None)
+                res = dedup_resolutions.get(lref) if lref else None
                 if res == "IGNORE" or (res and res.startswith("MERGE_LOCAL:")):
                     continue
 
@@ -621,10 +623,10 @@ class ImportService:
                         reason=mop.reason,
                         priority=mop.priority,
                         suggested_action=mop.suggested_action,
-                        status=mop.status or "OPEN",
+                        status="OPEN",
                         related_benefit_id=rel_b_id,
                         related_lead_id=mop.related_lead_id,
-                        result_notes=mop.result_notes or ""
+                        result_notes=""
                     )
                     db.add(m_model)
 

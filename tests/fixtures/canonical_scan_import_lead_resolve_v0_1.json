@@ -11,8 +11,7 @@
       "PUBLIC_COMPLETE",
       "OVERALL_PARTIAL"
     ],
-    "baseline_action": "UPDATE_EXISTING_BASELINE",
-    "summary_notes": "线索升级为新福利"
+    "baseline_action": "UPDATE_EXISTING_BASELINE"
   },
   "benefit_changes": [
     {
@@ -33,9 +32,13 @@
         "unit": "USD",
         "reset_policy": "NONE",
         "grant_method": "SIGNUP",
-        "regions": ["GLOBAL"],
+        "regions": [
+          "GLOBAL"
+        ],
         "eligibility": "新用户",
-        "eligibility_class": ["NEW_USERS"],
+        "eligibility_class": [
+          "NEW_USERS"
+        ],
         "start_date": "UNKNOWN",
         "end_date": "UNKNOWN",
         "first_seen": "2026-08-18",
@@ -60,7 +63,10 @@
           "source_level": "S",
           "source_role": "PRIMARY",
           "checked_at": "2026-08-18T17:20:00+08:00",
-          "supports_fields": ["amount", "status"]
+          "supports_fields": [
+            "amount",
+            "status"
+          ]
         }
       ]
     }

@@ -11,8 +11,7 @@
       "PUBLIC_COMPLETE",
       "OVERALL_PARTIAL"
     ],
-    "baseline_action": "UPDATE_EXISTING_BASELINE",
-    "summary_notes": "使用未到期复查"
+    "baseline_action": "UPDATE_EXISTING_BASELINE"
   },
   "benefit_changes": [],
   "lead_changes": [],

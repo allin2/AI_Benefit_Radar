@@ -10,6 +10,7 @@ from ai_benefit_desk.schemas.benefit_models import BenefitRecord
 from ai_benefit_desk.schemas.protocol_models import (
     ScanImportPackage, BenefitChangeOperation, LeadChangeOperation, LeadRecord, CanonicalSourceItem, CoverageEventItem
 )
+from ai_benefit_desk.services.coverage_planner import CoveragePlanner
 from ai_benefit_desk.utils.date_utils import is_review_due
 
 
@@ -102,52 +103,39 @@ class ValidationService:
         elif baseline_state == "READY" and baseline_action != "UPDATE_EXISTING_BASELINE":
             result.add_error("当前系统基线已就绪 (READY)，扫描动作必须为 UPDATE_EXISTING_BASELINE。")
 
-        # 4. Coverage & Scan Completion Consistency (NOT_CHECKED Gate)
+        # 4. Coverage & Scan Completion Consistency (Mandatory NOT_CHECKED Gate)
         scan_statuses = set(import_pkg.scan_result.scan_statuses)
         
-        def is_clearly_critical_surface(c: CoverageEventItem) -> bool:
-            s = (c.surface or "").upper()
-            critical_kws = [
-                "PRICING", "SIGNUP", "REGISTER", "REGISTRATION", "HOME", "HOMEPAGE",
-                "DOCS", "OFFICIAL_DOCS", "BILLING", "PLAN", "PRICE", "API",
-                "CLIENT_REWARD", "MAIN_PAGE", "PROMOTION", "ACTIVITY"
-            ]
-            return any(kw in s for kw in critical_kws)
-
-        def is_clearly_non_critical_surface(c: CoverageEventItem) -> bool:
-            s = (c.surface or "").upper()
-            non_critical_kws = ["COMMUNITY", "FORUM", "THIRD_PARTY", "BLOG", "SOCIAL", "MEDIA", "UNOFFICIAL", "EXTRA"]
-            return any(kw in s for kw in non_critical_kws)
-
-        critical_not_checked = []
-        non_critical_not_checked = []
-        uncertain_not_checked = []
+        mandatory_not_checked = []
+        non_mandatory_not_checked = []
+        unknown_criticality_not_checked = []
 
         for c in import_pkg.coverage_events:
             if c.coverage_state == "NOT_CHECKED":
-                if is_clearly_critical_surface(c):
-                    critical_not_checked.append(c)
-                elif is_clearly_non_critical_surface(c):
-                    non_critical_not_checked.append(c)
+                crit = CoveragePlanner.is_mandatory_surface(c.vendor, c.product, c.surface)
+                if crit is True:
+                    mandatory_not_checked.append(c)
+                elif crit is False:
+                    non_mandatory_not_checked.append(c)
                 else:
-                    uncertain_not_checked.append(c)
+                    unknown_criticality_not_checked.append(c)
 
-        if critical_not_checked:
+        if mandatory_not_checked:
             if "SCAN_INCOMPLETE" not in scan_statuses:
                 result.add_error("存在关键待检查 (NOT_CHECKED) 项时，扫描状态必须包含 SCAN_INCOMPLETE")
             if "PUBLIC_COMPLETE" in scan_statuses:
                 result.add_error("存在关键待检查 (NOT_CHECKED) 项时，扫描状态不能声明为公开扫描完成 (PUBLIC_COMPLETE)")
 
-        if non_critical_not_checked:
+        if non_mandatory_not_checked:
             result.add_warning(
-                "NON_CRITICAL_NOT_CHECKED",
-                f"存在 {len(non_critical_not_checked)} 个非关键渠道未检查 (NOT_CHECKED) 项，不阻塞整轮扫描完成状态。"
+                "NON_MANDATORY_NOT_CHECKED",
+                f"存在 {len(non_mandatory_not_checked)} 个非必查渠道未检查 (NOT_CHECKED) 项，不阻塞整轮扫描完成状态。"
             )
 
-        if uncertain_not_checked:
+        if unknown_criticality_not_checked:
             result.add_warning(
-                "UNCERTAIN_SURFACE_NOT_CHECKED",
-                f"存在 {len(uncertain_not_checked)} 个渠道重要度未确定的未检查 (NOT_CHECKED) 项，建议人工复核。"
+                "COVERAGE_CRITICALITY_UNKNOWN",
+                f"存在 {len(unknown_criticality_not_checked)} 个关键度未明确定义的渠道未检查 (NOT_CHECKED) 项，建议人工核对。"
             )
 
         # 5. Mode-specific & REVIEW_NOT_DUE Coverage Gate & Source ID Existence
@@ -390,7 +378,7 @@ class ValidationService:
         for lop in import_pkg.lead_changes:
             if lop.operation == "CREATE":
                 check_local_ref(lop.local_ref, "Lead CREATE")
-                if lop.lead_id is not None:
+                if getattr(lop, "lead_id", None) is not None:
                     result.add_error(f"新线索必须使用 local_ref，lead_id 由 Benefit Desk 分配。(提供了: {lop.lead_id})")
                 if lop.verification_status == "CONFIRMED":
                     result.add_error("已确认线索必须通过 RESOLVE_TO_BENEFIT 转为正式福利，不能继续保留为 CONFIRMED Lead。")
@@ -468,7 +456,7 @@ class ValidationService:
                     existing_lead = db.query(LeadModel).filter_by(lead_id=lop.lead_id).first()
                     if not existing_lead:
                         result.add_error(f"Lead REJECT 指定的 lead_id 不存在: {lop.lead_id}")
-                reason = lop.reason or lop.rejection_reason
+                reason = lop.reason
                 if not reason:
                     result.add_error(f"Lead REJECT 必须提供驳回原因 (lead_id: {lop.lead_id})")
                 if not lop.checked_at:
@@ -478,7 +466,7 @@ class ValidationService:
         for sop in import_pkg.source_updates:
             if sop.operation == "ADD":
                 check_local_ref(sop.local_ref, "Source ADD")
-                if sop.source_id is not None:
+                if getattr(sop, "source_id", None) is not None:
                     result.add_error(f"新官方入口必须使用 local_ref，source_id 由 Benefit Desk 分配。(提供了: {sop.source_id})")
                 if not sop.vendor or not sop.url or not sop.product or not sop.surface or not sop.source_name:
                     result.add_error(f"Source ADD 必须提供完整入口元数据 (vendor, product, surface, source_name, url): {sop.local_ref}")
@@ -536,7 +524,7 @@ class ValidationService:
         # 9. Manual Check Items Validation
         for mop in import_pkg.manual_check_items:
 
-            if mop.manual_check_id is not None:
+            if getattr(mop, "manual_check_id", None) is not None:
                 result.add_error("新人工检查项必须使用 local_ref，manual_check_id 由 Benefit Desk 分配。")
             if not mop.local_ref:
                 result.add_error("新人工检查项必须提供 local_ref。")
