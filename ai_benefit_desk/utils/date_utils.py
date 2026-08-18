@@ -1,0 +1,51 @@
+from datetime import datetime, date, timedelta
+from typing import Optional
+
+def today_str() -> str:
+    """Return today date in YYYY-MM-DD format."""
+    return date.today().isoformat()
+
+def parse_date(d_str: Optional[str]) -> Optional[date]:
+    """Safely parse YYYY-MM-DD date string."""
+    if not d_str or d_str.upper() == "UNKNOWN":
+        return None
+    try:
+        return datetime.strptime(d_str.strip(), "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+def is_valid_date_or_unknown(d_str: Optional[str]) -> bool:
+    """Check if string is either UNKNOWN or valid YYYY-MM-DD."""
+    if d_str is None:
+        return False
+    if d_str.upper() == "UNKNOWN":
+        return True
+    try:
+        datetime.strptime(d_str.strip(), "%Y-%m-%d")
+        return True
+    except Exception:
+        return False
+
+def is_expired(end_date_str: Optional[str], ref_date: Optional[date] = None) -> bool:
+    """Check if end_date is before ref_date (default today)."""
+    d = parse_date(end_date_str)
+    if not d:
+        return False
+    today = ref_date or date.today()
+    return d < today
+
+def is_expiring_soon(end_date_str: Optional[str], days: int = 7, ref_date: Optional[date] = None) -> bool:
+    """Check if end_date is between ref_date and ref_date + days."""
+    d = parse_date(end_date_str)
+    if not d:
+        return False
+    today = ref_date or date.today()
+    return today <= d <= (today + timedelta(days=days))
+
+def is_review_due(next_review_date_str: Optional[str], ref_date: Optional[date] = None) -> bool:
+    """Check if next_review_date is on or before ref_date (default today)."""
+    d = parse_date(next_review_date_str)
+    if not d:
+        return False
+    today = ref_date or date.today()
+    return d <= today

@@ -1,0 +1,222 @@
+import pytest
+import os
+import json
+from datetime import date
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from ai_benefit_desk.db.database import Base
+from ai_benefit_desk.db.init_db import init_db
+from ai_benefit_desk.db.models import (
+    BenefitModel, LeadModel, CoverageHistoryModel, CanonicalSourceModel,
+    UserBenefitStateModel, ScanModel, ImportAuditModel, SystemStateModel, ManualCheckModel
+)
+from ai_benefit_desk.services.export_service import ExportService
+from ai_benefit_desk.services.import_service import ImportService
+from ai_benefit_desk.utils.json_utils import dumps_json, loads_json
+
+def test_full_e2e_acceptance_loop():
+    # 1. 启动空 Benefit Desk 数据库
+    test_engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    init_db(bind=test_engine)
+    Session = sessionmaker(bind=test_engine)
+    db = Session()
+
+    try:
+        # 2. baseline_state = EMPTY, baseline_revision = 0
+        sys_state = db.query(SystemStateModel).filter_by(id=1).first()
+        assert sys_state.baseline_state == "EMPTY"
+        assert sys_state.baseline_revision == 0
+
+        # 3. 点击“导出扫描上下文”
+        context_pkg = ExportService.generate_scan_context(db, requested_mode="FULL_SCAN")
+        scan_id_1 = context_pkg.scan.scan_id
+
+        # 4. 得到合法 SCAN_CONTEXT JSON
+        assert context_pkg.protocol_version == "0.1"
+        assert context_pkg.benefit_schema_version == "1.2.1"
+        assert context_pkg.package_type == "SCAN_CONTEXT"
+        assert context_pkg.scan.baseline_revision == 0
+        assert context_pkg.scan.baseline_state == "EMPTY"
+        assert len(context_pkg.benefit_index) == 0
+
+        # 5. 模拟 ChatGPT 返回合法 SCAN_IMPORT JSON
+        import_data = {
+            "protocol_version": "0.1",
+            "benefit_schema_version": "1.2.1",
+            "package_type": "SCAN_IMPORT",
+            "scan_result": {
+                "scan_id": scan_id_1,
+                "requested_mode": "FULL_SCAN",
+                "actual_scan_mode": "FULL_SCAN",
+                "baseline_action": "BUILD_INITIAL_BASELINE",
+                "context_baseline_revision": 0,
+                "scan_timestamp": "2026-08-18T12:00:00Z",
+                "public_scan_status": "PUBLIC_COMPLETE",
+                "overall_coverage_status": "OVERALL_PARTIAL",
+                "summary_notes": "首次基线构建完成"
+            },
+            "benefit_changes": [
+                {
+                    "operation": "CREATE",
+                    "local_ref": "BNEW-001",
+                    "benefit_id": None,
+                    "benefit_record": {
+                        "vendor": "TRAE",
+                        "product": "TRAE CN",
+                        "campaign_name": "Daily Checkin Bonus",
+                        "benefit_type": "CHECKIN",
+                        "benefit_detail": "每日签到获得专属积分",
+                        "wallet": "通用积分",
+                        "amount": "100",
+                        "unit": "POINTS",
+                        "reset_policy": "DAILY",
+                        "grant_method": "CHECKIN",
+                        "regions": ["CN"],
+                        "eligibility": "所有注册用户",
+                        "eligibility_class": ["ALL_USERS"],
+                        "first_seen": "2026-08-18",
+                        "last_checked": "2026-08-18",
+                        "official_source": "https://trae.cn",
+                        "source_level": "S",
+                        "verification_status": "CONFIRMED",
+                        "status": "ACTIVE",
+                        "change_type": "UNKNOWN"
+                    }
+                }
+            ],
+            "lead_changes": [
+                {
+                    "operation": "CREATE",
+                    "local_ref": "LNEW-001",
+                    "lead_record": {
+                        "vendor": "Anthropic",
+                        "product": "Claude Code",
+                        "lead_summary": "疑似新用户赠送 20 美金 API Credits",
+                        "verification_status": "LIKELY",
+                        "source_level": "B",
+                        "regions": ["GLOBAL"],
+                        "first_seen": "2026-08-18",
+                        "last_checked": "2026-08-18",
+                        "status": "OPEN"
+                    }
+                }
+            ],
+            "coverage_events": [
+                {
+                    "vendor": "TRAE",
+                    "product": "TRAE CN",
+                    "surface": "Client Reward",
+                    "region": "CN",
+                    "coverage_state": "CHECKED_FOUND",
+                    "scan_observed_at": "2026-08-18",
+                    "actual_checked_at": "2026-08-18"
+                }
+            ],
+            "source_updates": [
+                {
+                    "operation": "ADD",
+                    "local_ref": "SNEW-001",
+                    "source_record": {
+                        "vendor": "TRAE",
+                        "product": "TRAE CN",
+                        "surface": "Client Reward",
+                        "source_name": "TRAE 活动中心",
+                        "url": "https://trae.cn/activity",
+                        "source_type": "ACTIVITY_CENTER",
+                        "source_level": "S",
+                        "status": "ACTIVE"
+                    }
+                }
+            ],
+            "manual_check_items": [
+                {
+                    "local_ref": "MNEW-001",
+                    "vendor": "TRAE",
+                    "product": "TRAE IDE",
+                    "channel": "IDE",
+                    "reason": "检查 IDE 弹窗中是否存在限时积分领取入口",
+                    "priority": "MEDIUM",
+                    "suggested_action": "打开 IDE 登录查看活动弹窗",
+                    "status": "OPEN"
+                }
+            ],
+            "warnings": []
+        }
+        raw_import_json = dumps_json(import_data)
+
+        # 6. 上传 Scan Import & 7. 系统执行所有 Validation
+        preview = ImportService.parse_and_preview(db, raw_import_json)
+        assert preview["is_valid"] is True
+        assert len(preview["errors"]) == 0
+
+        # 8. 显示中文导入预览
+        p = preview["preview"]
+        assert p["benefit_create_count"] == 1
+        assert p["lead_create_count"] == 1
+        assert p["coverage_recheck_count"] == 1
+        assert p["source_add_count"] == 1
+        assert p["manual_check_count"] == 1
+
+        # 9. 用户确认
+        commit_res = ImportService.commit_import(db, preview["import_pkg"], raw_import_json)
+        assert commit_res["success"] is True
+
+        # 10. 新福利获得正式 benefit_id
+        b = db.query(BenefitModel).filter_by(vendor="TRAE").first()
+        assert b is not None
+        assert b.benefit_id == "BEN-000001"
+        assert b.campaign_name == "Daily Checkin Bonus"
+
+        # 11. Coverage / Lead / Source 正确写入
+        lead = db.query(LeadModel).filter_by(lead_id="LEAD-000001").first()
+        assert lead is not None
+        assert lead.vendor == "Anthropic"
+
+        cov = db.query(CoverageHistoryModel).filter_by(coverage_id="COV-000001").first()
+        assert cov is not None
+        assert cov.coverage_state == "CHECKED_FOUND"
+
+        src = db.query(CanonicalSourceModel).filter_by(source_id="SRC-000001").first()
+        assert src is not None
+        assert src.status == "ACTIVE"
+
+        mchk = db.query(ManualCheckModel).filter_by(manual_check_id="MCHK-000001").first()
+        assert mchk is not None
+        assert mchk.channel == "IDE"
+
+        # 12. User Benefit State 保持独立 (用户可以在 UI 标记 CLAIMED)
+        u_state = UserBenefitStateModel(benefit_id=b.benefit_id, action_state="CLAIMED", notes="已完成签到")
+        db.add(u_state)
+        db.commit()
+
+        # 13. baseline_revision + 1, baseline_state = READY
+        sys_state = db.query(SystemStateModel).filter_by(id=1).first()
+        assert sys_state.baseline_revision == 1
+        assert sys_state.baseline_state == "READY"
+
+        # 14. 相同 scan_id 再次导入被阻止
+        preview_dup = ImportService.parse_and_preview(db, raw_import_json)
+        assert preview_dup["is_valid"] is False
+        assert any("该扫描已经导入" in err for err in preview_dup["errors"])
+
+        # 15. 再次导出 Scan Context
+        context_pkg_2 = ExportService.generate_scan_context(db, requested_mode="FULL_SCAN")
+        assert context_pkg_2.scan.baseline_revision == 1
+        assert context_pkg_2.scan.baseline_state == "READY"
+
+        # 16. 新 Context 正确包含刚才入库的数据
+        assert len(context_pkg_2.benefit_index) == 1
+        assert context_pkg_2.benefit_index[0].benefit_id == "BEN-000001"
+        assert len(context_pkg_2.open_leads) == 1
+        assert context_pkg_2.open_leads[0].lead_id == "LEAD-000001"
+        assert len(context_pkg_2.latest_coverage) == 1
+        assert context_pkg_2.latest_coverage[0].coverage_id == "COV-000001"
+        assert len(context_pkg_2.canonical_sources) == 1
+        assert context_pkg_2.canonical_sources[0].source_id == "SRC-000001"
+        assert len(context_pkg_2.user_benefit_states) == 1
+        assert context_pkg_2.user_benefit_states[0].action_state == "CLAIMED"
+        assert len(context_pkg_2.manual_checks_open) == 1
+        assert context_pkg_2.manual_checks_open[0].manual_check_id == "MCHK-000001"
+
+    finally:
+        db.close()
