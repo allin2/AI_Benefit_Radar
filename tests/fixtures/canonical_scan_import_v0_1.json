@@ -85,17 +85,15 @@
     {
       "operation": "ADD",
       "local_ref": "SNEW-001",
-      "record": {
-        "vendor": "OpenAI",
-        "product": "ChatGPT",
-        "surface": "Free / Signup",
-        "source_name": "ChatGPT Pricing",
-        "url": "https://openai.com/chatgpt/pricing",
-        "source_type": "PRICING",
-        "source_level": "S",
-        "status": "ACTIVE",
-        "last_verified_at": "2026-08-18T18:00:00+08:00"
-      }
+      "vendor": "OpenAI",
+      "product": "ChatGPT",
+      "surface": "Free / Signup",
+      "source_name": "ChatGPT Pricing",
+      "url": "https://openai.com/chatgpt/pricing",
+      "source_type": "PRICING",
+      "source_level": "S",
+      "status": "ACTIVE",
+      "last_verified_at": "2026-08-18T18:00:00+08:00"
     }
   ],
   "manual_check_items": [],

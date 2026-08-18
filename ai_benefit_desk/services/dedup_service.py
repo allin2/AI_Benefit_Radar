@@ -53,9 +53,11 @@ class DedupService:
                     "conflicts": {}
                 }
 
-            # Check 2: Same Vendor and Official Source URL (non-UNKNOWN)
+            # Check 2: Same Vendor, Benefit Type, Wallet, and Official Source URL (non-UNKNOWN)
             if c_source_norm and c_source_norm != "unknown" and c_source_norm == b_source_norm:
-                if c_vendor_norm == b_vendor_norm and c_vendor_norm != "":
+                if (c_vendor_norm == b_vendor_norm and c_vendor_norm != "" and 
+                    candidate.benefit_type == b.benefit_type and
+                    (c_camp_norm == b_camp_norm or (normalize_text(candidate.wallet) == normalize_text(b.wallet) and candidate.wallet != "UNKNOWN"))):
                     return {
                         "local_ref": local_ref,
                         "existing_benefit_id": b.benefit_id,
@@ -63,7 +65,7 @@ class DedupService:
                         "existing_vendor": b.vendor,
                         "existing_product": b.product,
                         "is_intra_package": False,
-                        "reason": "厂商与官方来源 URL 完全一致",
+                        "reason": "厂商、福利类型与官方来源 URL 完全一致",
                         "confidence": "HIGH",
                         "has_conflict": False,
                         "conflicts": {}
@@ -106,10 +108,12 @@ class DedupService:
         if c1_v == c2_v and c1_p == c2_p and c1_c == c2_c and c1_v != "":
             return ("厂商、产品与活动名称完全匹配", "HIGH")
 
-        # Check 2: Same Vendor and Official Source URL (non-UNKNOWN)
+        # Check 2: Same Vendor, Benefit Type, Wallet, and Official Source URL (non-UNKNOWN)
         if c1_s and c1_s != "unknown" and c1_s == c2_s:
-            if c1_v == c2_v and c1_v != "":
-                return ("厂商与官方来源 URL 完全一致", "HIGH")
+            if (c1_v == c2_v and c1_v != "" and 
+                c1.benefit_type == c2.benefit_type and
+                (c1_c == c2_c or (normalize_text(c1.wallet) == normalize_text(c2.wallet) and c1.wallet != "UNKNOWN"))):
+                return ("厂商、福利类型与官方来源 URL 完全一致", "HIGH")
 
         # Check 3: Same Vendor, Product, Benefit Type, and Wallet
         if (c1_v == c2_v and c1_p == c2_p and c1_v != "" and

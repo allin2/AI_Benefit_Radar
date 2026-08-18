@@ -1185,18 +1185,15 @@ def test_034_source_add_remains_exportable(db_session):
         {
             "operation": "ADD",
             "local_ref": "SNEW-001",
-            "record": {
-                "source_id": None,
-                "vendor": "OpenAI",
-                "product": "ChatGPT",
-                "surface": "Docs",
-                "source_name": "OpenAI Developer Platform",
-                "url": "https://platform.openai.com/docs",
-                "source_type": "OFFICIAL_DOCS",
-                "source_level": "S",
-                "status": "ACTIVE",
-                "last_verified_at": None  # Trigger fallback
-            }
+            "vendor": "OpenAI",
+            "product": "ChatGPT",
+            "surface": "Docs",
+            "source_name": "OpenAI Developer Platform",
+            "url": "https://platform.openai.com/docs",
+            "source_type": "OFFICIAL_DOCS",
+            "source_level": "S",
+            "status": "ACTIVE",
+            "last_verified_at": None  # Trigger fallback
         }
     ]
     raw_json = dumps_json(payload)
@@ -1529,16 +1526,14 @@ def test_039_lead_cannot_remain_confirmed(db_session):
     p_a["lead_changes"].append({
         "operation": "CREATE",
         "local_ref": "LNEW-001",
-        "record": {
-            "vendor": "Meta",
-            "product": "Llama",
-            "lead_summary": "Meta Free Credits",
-            "verification_status": "CONFIRMED",
-            "source_level": "S",
-            "first_seen": "2026-08-18",
-            "last_checked": "2026-08-18",
-            "status": "OPEN"
-        }
+        "vendor": "Meta",
+        "product": "Llama",
+        "lead_summary": "Meta Free Credits",
+        "verification_status": "CONFIRMED",
+        "source_level": "S",
+        "first_seen": "2026-08-18",
+        "last_checked": "2026-08-18",
+        "status": "OPEN"
     })
     prev_a = ImportService.parse_and_preview(db_session, dumps_json(p_a))
     assert prev_a["is_valid"] is False
@@ -1611,17 +1606,15 @@ def test_040_permanent_id_ownership(db_session):
     p_a["lead_changes"].append({
         "operation": "CREATE",
         "local_ref": "LNEW-001",
-        "record": {
-            "lead_id": "LEAD-999999",
-            "vendor": "OpenAI",
-            "product": "ChatGPT",
-            "lead_summary": "Test Lead",
-            "verification_status": "LIKELY",
-            "source_level": "A",
-            "first_seen": "2026-08-18",
-            "last_checked": "2026-08-18",
-            "status": "OPEN"
-        }
+        "lead_id": "LEAD-999999",
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "lead_summary": "Test Lead",
+        "verification_status": "LIKELY",
+        "source_level": "A",
+        "first_seen": "2026-08-18",
+        "last_checked": "2026-08-18",
+        "status": "OPEN"
     })
     prev_a = ImportService.parse_and_preview(db_session, dumps_json(p_a))
     assert prev_a["is_valid"] is False
@@ -1632,17 +1625,15 @@ def test_040_permanent_id_ownership(db_session):
     p_b["source_updates"].append({
         "operation": "ADD",
         "local_ref": "SNEW-001",
-        "record": {
-            "source_id": "SRC-999999",
-            "vendor": "OpenAI",
-            "product": "ChatGPT",
-            "surface": "PRICING",
-            "source_name": "OpenAI Pricing",
-            "url": "https://openai.com/pricing",
-            "source_type": "OFFICIAL_PAGE",
-            "source_level": "S",
-            "status": "ACTIVE"
-        }
+        "source_id": "SRC-999999",
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "surface": "PRICING",
+        "source_name": "OpenAI Pricing",
+        "url": "https://openai.com/pricing",
+        "source_type": "OFFICIAL_PAGE",
+        "source_level": "S",
+        "status": "ACTIVE"
     })
     prev_b = ImportService.parse_and_preview(db_session, dumps_json(p_b))
     assert prev_b["is_valid"] is False
@@ -1687,30 +1678,26 @@ def test_040_permanent_id_ownership(db_session):
     p_e["lead_changes"].append({
         "operation": "CREATE",
         "local_ref": "LNEW-040",
-        "record": {
-            "vendor": "OpenAI",
-            "product": "ChatGPT",
-            "lead_summary": "Test Valid Lead",
-            "verification_status": "LIKELY",
-            "source_level": "A",
-            "first_seen": "2026-08-18",
-            "last_checked": "2026-08-18",
-            "status": "OPEN"
-        }
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "lead_summary": "Test Valid Lead",
+        "verification_status": "LIKELY",
+        "source_level": "A",
+        "first_seen": "2026-08-18",
+        "last_checked": "2026-08-18",
+        "status": "OPEN"
     })
     p_e["source_updates"].append({
         "operation": "ADD",
         "local_ref": "SNEW-040",
-        "record": {
-            "vendor": "OpenAI",
-            "product": "ChatGPT",
-            "surface": "PRICING",
-            "source_name": "OpenAI Pricing Valid",
-            "url": "https://openai.com/pricing",
-            "source_type": "OFFICIAL_PAGE",
-            "source_level": "S",
-            "status": "ACTIVE"
-        }
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "surface": "PRICING",
+        "source_name": "OpenAI Pricing Valid",
+        "url": "https://openai.com/pricing",
+        "source_type": "OFFICIAL_PAGE",
+        "source_level": "S",
+        "status": "ACTIVE"
     })
     raw_e = dumps_json(p_e)
     prev_e = ImportService.parse_and_preview(db_session, raw_e)
@@ -2592,16 +2579,14 @@ def test_053_lead_confirmed_forbidden(db_session):
     p_a["lead_changes"].append({
         "operation": "CREATE",
         "local_ref": "LNEW-053A",
-        "record": {
-            "vendor": "Meta",
-            "product": "Llama",
-            "lead_summary": "Meta Free Credits",
-            "verification_status": "CONFIRMED",
-            "source_level": "S",
-            "first_seen": "2026-08-18",
-            "last_checked": "2026-08-18",
-            "status": "OPEN"
-        }
+        "vendor": "Meta",
+        "product": "Llama",
+        "lead_summary": "Meta Free Credits",
+        "verification_status": "CONFIRMED",
+        "source_level": "S",
+        "first_seen": "2026-08-18",
+        "last_checked": "2026-08-18",
+        "status": "OPEN"
     })
     prev_a = ImportService.parse_and_preview(db_session, dumps_json(p_a))
     assert prev_a["is_valid"] is False

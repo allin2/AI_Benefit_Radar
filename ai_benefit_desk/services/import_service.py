@@ -457,21 +457,20 @@ class ImportService:
             for lop in import_pkg.lead_changes:
                 if lop.operation == "CREATE":
                     perm_lead_id = local_ref_to_id[lop.local_ref]
-                    lrec = lop.record
                     l_model = LeadModel(
                         lead_id=perm_lead_id,
-                        vendor=lrec.vendor,
-                        product=lrec.product,
-                        lead_summary=lrec.lead_summary,
-                        verification_status=lrec.verification_status,
-                        source_level=lrec.source_level,
-                        missing_evidence=lrec.missing_evidence or "",
-                        first_seen=lrec.first_seen,
-                        last_checked=lrec.last_checked,
-                        next_review_date=lrec.next_review_date or "UNKNOWN",
+                        vendor=lop.vendor,
+                        product=lop.product or "UNKNOWN",
+                        lead_summary=lop.lead_summary,
+                        verification_status=lop.verification_status,
+                        source_level=lop.source_level,
+                        missing_evidence=lop.missing_evidence or "",
+                        first_seen=lop.first_seen or date.today().isoformat(),
+                        last_checked=lop.last_checked or date.today().isoformat(),
+                        next_review_date=lop.next_review_date or "UNKNOWN",
                         status="OPEN"
                     )
-                    l_model.regions = lrec.regions
+                    l_model.regions = lop.regions
                     db.add(l_model)
 
                 elif lop.operation == "UPDATE":
@@ -523,7 +522,7 @@ class ImportService:
                     if not existing_lead:
                         raise ValueError(f"要驳回的线索不存在: {lop.lead_id}")
                     existing_lead.status = "REJECTED"
-                    existing_lead.rejection_reason = lop.rejection_reason
+                    existing_lead.rejection_reason = lop.reason or lop.rejection_reason
 
             # 6. Process Coverage Events
             for cov in import_pkg.coverage_events:
@@ -560,19 +559,18 @@ class ImportService:
             # 7. Process Source Updates
             for sop in import_pkg.source_updates:
                 if sop.operation == "ADD":
-                    srec = sop.record
                     src_id = local_ref_to_id[sop.local_ref]
                     src_model = CanonicalSourceModel(
                         source_id=src_id,
-                        vendor=srec.vendor,
-                        product=srec.product,
-                        surface=srec.surface,
-                        source_name=srec.source_name,
-                        url=srec.url,
-                        source_type=srec.source_type,
-                        source_level=srec.source_level,
+                        vendor=sop.vendor,
+                        product=sop.product or "UNKNOWN",
+                        surface=sop.surface or "UNKNOWN",
+                        source_name=sop.source_name or f"{sop.vendor} Source",
+                        url=sop.url,
+                        source_type=sop.source_type or "OFFICIAL_PAGE",
+                        source_level=sop.source_level,
                         status="ACTIVE",
-                        last_verified_at=srec.last_verified_at or now_timezone_iso()
+                        last_verified_at=sop.last_verified_at or now_timezone_iso()
                     )
                     db.add(src_model)
                 elif sop.operation == "UPDATE":
@@ -602,6 +600,8 @@ class ImportService:
                     existing_s = db.query(CanonicalSourceModel).filter_by(source_id=sop.source_id).first()
                     if existing_s:
                         existing_s.status = "DEPRECATED"
+                        if sop.last_verified_at:
+                            existing_s.last_verified_at = sop.last_verified_at
 
 
             # 8. Process Manual Checks

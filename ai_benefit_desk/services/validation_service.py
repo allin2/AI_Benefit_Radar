@@ -351,13 +351,12 @@ class ValidationService:
         for lop in import_pkg.lead_changes:
             if lop.operation == "CREATE":
                 check_local_ref(lop.local_ref, "Lead CREATE")
-                if not lop.record:
-                    result.add_error(f"Lead CREATE 操作必须包含 record 对象: {lop.local_ref}")
-                else:
-                    if lop.record.lead_id is not None:
-                        result.add_error(f"新线索必须使用 local_ref，lead_id 由 Benefit Desk 分配。(提供了: {lop.record.lead_id})")
-                    if lop.record.verification_status == "CONFIRMED":
-                        result.add_error("已确认线索必须通过 RESOLVE_TO_BENEFIT 转为正式福利，不能继续保留为 CONFIRMED Lead。")
+                if lop.lead_id is not None:
+                    result.add_error(f"新线索必须使用 local_ref，lead_id 由 Benefit Desk 分配。(提供了: {lop.lead_id})")
+                if lop.verification_status == "CONFIRMED":
+                    result.add_error("已确认线索必须通过 RESOLVE_TO_BENEFIT 转为正式福利，不能继续保留为 CONFIRMED Lead。")
+                if not lop.vendor or not lop.lead_summary:
+                    result.add_error(f"Lead CREATE 操作必须包含 vendor 和 lead_summary: {lop.local_ref}")
 
             elif lop.operation == "UPDATE":
                 if not lop.lead_id:
@@ -370,6 +369,8 @@ class ValidationService:
                         if lop.patch is None or not isinstance(lop.patch, dict):
                             result.add_error(f"Lead UPDATE 必须提供 patch 字典 (lead_id: {lop.lead_id})")
                         else:
+                            if "lead_id" in lop.patch:
+                                result.add_error(f"Lead UPDATE patch 禁止修改 lead_id (lead_id: {lop.lead_id})")
                             existing_lead_dict = {
                                 "lead_id": existing_lead.lead_id,
                                 "vendor": existing_lead.vendor,
@@ -426,18 +427,18 @@ class ValidationService:
                     existing_lead = db.query(LeadModel).filter_by(lead_id=lop.lead_id).first()
                     if not existing_lead:
                         result.add_error(f"Lead REJECT 指定的 lead_id 不存在: {lop.lead_id}")
-                if not lop.rejection_reason:
+                reason = lop.reason or lop.rejection_reason
+                if not reason:
                     result.add_error(f"Lead REJECT 必须提供驳回原因 (lead_id: {lop.lead_id})")
 
         # 8. Source Updates Validation
         for sop in import_pkg.source_updates:
             if sop.operation == "ADD":
                 check_local_ref(sop.local_ref, "Source ADD")
-                if not sop.record:
-                    result.add_error(f"Source ADD 必须提供 record 对象: {sop.local_ref}")
-                else:
-                    if sop.record.source_id is not None:
-                        result.add_error(f"新官方入口必须使用 local_ref，source_id 由 Benefit Desk 分配。(提供了: {sop.record.source_id})")
+                if sop.source_id is not None:
+                    result.add_error(f"新官方入口必须使用 local_ref，source_id 由 Benefit Desk 分配。(提供了: {sop.source_id})")
+                if not sop.vendor or not sop.url:
+                    result.add_error(f"Source ADD 必须提供 vendor 和 url: {sop.local_ref}")
             elif sop.operation == "UPDATE":
                 if not sop.source_id:
                     result.add_error("Source UPDATE 必须指定 source_id")
@@ -449,6 +450,8 @@ class ValidationService:
                         if sop.patch is None or not isinstance(sop.patch, dict):
                             result.add_error(f"Source UPDATE 必须提供 patch 字典 (source_id: {sop.source_id})")
                         else:
+                            if "source_id" in sop.patch:
+                                result.add_error(f"Source UPDATE patch 禁止修改 source_id (source_id: {sop.source_id})")
                             existing_src_dict = {
                                 "source_id": s_exist.source_id,
                                 "vendor": s_exist.vendor,

@@ -114,17 +114,15 @@ def test_lifecycle_a_initial_baseline():
                 {
                     "operation": "CREATE",
                     "local_ref": "LNEW-001",
-                    "record": {
-                        "vendor": "Anthropic",
-                        "product": "Claude Code",
-                        "lead_summary": "新用户赠送 20 美金 API Credits",
-                        "verification_status": "LIKELY",
-                        "source_level": "B",
-                        "regions": ["GLOBAL"],
-                        "first_seen": "2026-08-18",
-                        "last_checked": "2026-08-18",
-                        "status": "OPEN"
-                    },
+                    "vendor": "Anthropic",
+                    "product": "Claude Code",
+                    "lead_summary": "新用户赠送 20 美金 API Credits",
+                    "verification_status": "LIKELY",
+                    "source_level": "B",
+                    "regions": ["GLOBAL"],
+                    "first_seen": "2026-08-18",
+                    "last_checked": "2026-08-18",
+                    "status": "OPEN",
                     "evidence": []
                 }
             ],
@@ -144,17 +142,15 @@ def test_lifecycle_a_initial_baseline():
                 {
                     "operation": "ADD",
                     "local_ref": "SNEW-001",
-                    "record": {
-                        "vendor": "TRAE",
-                        "product": "TRAE CN",
-                        "surface": "Client Reward",
-                        "source_name": "TRAE 活动中心",
-                        "url": "https://trae.cn/activity",
-                        "source_type": "ACTIVITY_CENTER",
-                        "source_level": "S",
-                        "status": "ACTIVE",
-                        "last_verified_at": "2026-08-18T18:25:00+08:00"
-                    }
+                    "vendor": "TRAE",
+                    "product": "TRAE CN",
+                    "surface": "Client Reward",
+                    "source_name": "TRAE 活动中心",
+                    "url": "https://trae.cn/activity",
+                    "source_type": "ACTIVITY_CENTER",
+                    "source_level": "S",
+                    "status": "ACTIVE",
+                    "last_verified_at": "2026-08-18T18:25:00+08:00"
                 }
             ],
             "manual_check_items": [
@@ -517,17 +513,15 @@ def test_lifecycle_b_normal_full_scan_update():
             "lead_changes": [{
                 "operation": "CREATE",
                 "local_ref": "LNEW-002",
-                "record": {
-                    "lead_id": "LEAD-999999",
-                    "vendor": "Meta",
-                    "product": "Llama",
-                    "lead_summary": "Fake id lead",
-                    "verification_status": "LIKELY",
-                    "source_level": "A",
-                    "first_seen": "2026-08-18",
-                    "last_checked": "2026-08-18",
-                    "status": "OPEN"
-                }
+                "lead_id": "LEAD-999999",
+                "vendor": "Meta",
+                "product": "Llama",
+                "lead_summary": "Fake id lead",
+                "verification_status": "LIKELY",
+                "source_level": "A",
+                "first_seen": "2026-08-18",
+                "last_checked": "2026-08-18",
+                "status": "OPEN"
             }],
             "coverage_events": [{
                 "coverage_id": "COV-999999",
@@ -542,17 +536,15 @@ def test_lifecycle_b_normal_full_scan_update():
             "source_updates": [{
                 "operation": "ADD",
                 "local_ref": "SNEW-002",
-                "record": {
-                    "source_id": "SRC-999999",
-                    "vendor": "Meta",
-                    "product": "Llama",
-                    "surface": "API",
-                    "source_name": "Meta API",
-                    "url": "https://meta.com",
-                    "source_type": "OFFICIAL_PAGE",
-                    "source_level": "S",
-                    "status": "ACTIVE"
-                }
+                "source_id": "SRC-999999",
+                "vendor": "Meta",
+                "product": "Llama",
+                "surface": "API",
+                "source_name": "Meta API",
+                "url": "https://meta.com",
+                "source_type": "OFFICIAL_PAGE",
+                "source_level": "S",
+                "status": "ACTIVE"
             }],
             "manual_check_items": [],
             "warnings": []
@@ -1041,16 +1033,14 @@ def test_lifecycle_e_validation_integrity():
                 {
                     "operation": "CREATE",
                     "local_ref": "LNEW-NEG2",
-                    "record": {
-                        "vendor": "VendorE",
-                        "product": "ProductE",
-                        "lead_summary": "Confirmed lead forbidden",
-                        "verification_status": "CONFIRMED",
-                        "source_level": "S",
-                        "first_seen": "2026-08-18",
-                        "last_checked": "2026-08-18",
-                        "status": "OPEN"
-                    }
+                    "vendor": "VendorE",
+                    "product": "ProductE",
+                    "lead_summary": "Confirmed lead forbidden",
+                    "verification_status": "CONFIRMED",
+                    "source_level": "S",
+                    "first_seen": "2026-08-18",
+                    "last_checked": "2026-08-18",
+                    "status": "OPEN"
                 }
             ],
             "coverage_events": [],

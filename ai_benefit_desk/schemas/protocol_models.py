@@ -542,11 +542,32 @@ class LeadChangeOperation(BaseModel):
     operation: str
     local_ref: Optional[str] = None
     lead_id: Optional[str] = None
-    record: Optional[LeadRecord] = None
+    
+    # Flat Lead attributes for CREATE
+    vendor: Optional[str] = None
+    product: Optional[str] = None
+    lead_summary: Optional[str] = None
+    verification_status: Optional[str] = None
+    source_level: Optional[str] = None
+    regions: List[str] = Field(default_factory=lambda: ["UNKNOWN"])
+    missing_evidence: Optional[str] = ""
+    first_seen: Optional[str] = None
+    last_checked: Optional[str] = None
+    next_review_date: Optional[str] = "UNKNOWN"
+    status: str = "OPEN"
+    
+    # Fields for UPDATE
     patch: Optional[Dict[str, Any]] = None
+    
+    # Fields for RESOLVE_TO_BENEFIT
     target_benefit_ref: Optional[str] = None
     target_benefit_id: Optional[str] = None
+    
+    # Fields for REJECT
+    reason: Optional[str] = None
     rejection_reason: Optional[str] = None
+    checked_at: Optional[str] = None
+    
     evidence: List[EvidenceItem] = Field(default_factory=list)
 
     @field_validator("operation")
@@ -557,14 +578,78 @@ class LeadChangeOperation(BaseModel):
             raise ValueError(f"Invalid lead operation: {val}")
         return val
 
+    @field_validator("verification_status")
+    @classmethod
+    def validate_verification_status(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        val = v.upper()
+        if val == "CONFIRMED":
+            raise ValueError("已确认线索必须通过 RESOLVE_TO_BENEFIT 转为正式福利，不能继续保留为 CONFIRMED Lead。")
+        if val not in VALID_LEAD_VERIFICATION_STATUSES:
+            raise ValueError(f"Invalid verification_status for Lead: {val}")
+        return val
+
+    @field_validator("source_level")
+    @classmethod
+    def validate_source_level(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        val = v.upper()
+        if val not in VALID_SOURCE_LEVELS:
+            raise ValueError(f"Invalid source_level: {val}")
+        return val
+
+    @field_validator("regions")
+    @classmethod
+    def validate_regions(cls, v: List[str]) -> List[str]:
+        if not v:
+            return ["UNKNOWN"]
+        for r in v:
+            if r not in VALID_REGIONS:
+                raise ValueError(f"Invalid region: {r}")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        val = v.upper()
+        if val not in VALID_LEAD_STATUSES:
+            raise ValueError(f"Invalid lead status: {val}")
+        return val
+
+    @field_validator("first_seen", "last_checked", "next_review_date")
+    @classmethod
+    def validate_dates(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return "UNKNOWN"
+        if not is_valid_date_or_unknown(v):
+            raise ValueError(f"Invalid date format (must be YYYY-MM-DD or UNKNOWN): {v}")
+        return v
+
 # Source Updates
 class SourceUpdateOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation: str
     local_ref: Optional[str] = None
     source_id: Optional[str] = None
-    record: Optional[CanonicalSourceItem] = None
+    
+    # Flat Source attributes for ADD
+    vendor: Optional[str] = None
+    product: Optional[str] = None
+    surface: Optional[str] = None
+    source_name: Optional[str] = None
+    url: Optional[str] = None
+    source_type: Optional[str] = None
+    source_level: Optional[str] = None
+    status: str = "ACTIVE"
+    last_verified_at: Optional[str] = None
+    
+    # Fields for UPDATE
     patch: Optional[Dict[str, Any]] = None
+    
+    # Fields for DEPRECATE
+    reason: Optional[str] = None
 
     @field_validator("operation")
     @classmethod
@@ -573,6 +658,32 @@ class SourceUpdateOperation(BaseModel):
         if val not in VALID_SOURCE_OPERATIONS:
             raise ValueError(f"Invalid source operation: {val}")
         return val
+
+    @field_validator("source_level")
+    @classmethod
+    def validate_source_level(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        val = v.upper()
+        if val not in VALID_SOURCE_LEVELS:
+            raise ValueError(f"Invalid source_level: {val}")
+        return val
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        val = v.upper()
+        if val not in VALID_SOURCE_STATUSES:
+            raise ValueError(f"Invalid source status: {val}")
+        return val
+
+    @field_validator("last_verified_at")
+    @classmethod
+    def validate_last_verified_at(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v != "" and v.upper() != "UNKNOWN":
+            if not is_valid_timezone_iso8601(v):
+                raise ValueError(f"last_verified_at must be timezone-aware ISO8601 (e.g. 2026-08-18T19:00:00+08:00): {v}")
+        return v
 
 class ScanImportPackage(BaseModel):
     model_config = ConfigDict(extra="forbid")

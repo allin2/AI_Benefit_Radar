@@ -24,9 +24,17 @@ if uploaded_file is not None:
         preview_data = ImportService.parse_and_preview(db, raw_content, user_override_evidence=override_ev)
         
         if not preview_data["is_valid"]:
-            st.error("❌ **校验失败，禁止导入！** 发现以下阻塞性错误：")
-            for err in preview_data["errors"]:
-                st.error(f"- {err}")
+            errors = preview_data["errors"]
+            st.error(f"❌ **校验失败，禁止导入！** 发现 {len(errors)} 项阻塞性错误：")
+            if len(errors) <= 5:
+                for err in errors:
+                    st.error(f"- {err}")
+            else:
+                for err in errors[:5]:
+                    st.error(f"- {err}")
+                with st.expander(f"查看其余 {len(errors) - 5} 项错误明细", expanded=False):
+                    for err in errors[5:]:
+                        st.write(f"- {err}")
         else:
             p = preview_data["preview"]
             pkg = preview_data["import_pkg"]
@@ -125,12 +133,14 @@ if uploaded_file is not None:
             if p["lead_changes"]:
                 with st.expander("查看线索变更明细", expanded=False):
                     for lop in p["lead_changes"]:
-                        if lop.operation == "CREATE" and lop.record:
-                            st.write(f"- **[CREATE]** [{lop.local_ref}] {lop.record.lead_summary}")
+                        if lop.operation == "CREATE":
+                            st.write(f"- **[CREATE]** [{lop.local_ref}] {lop.vendor} - {lop.product} | {lop.lead_summary}")
                         elif lop.operation == "RESOLVE_TO_BENEFIT":
                             st.write(f"- **[RESOLVE_TO_BENEFIT]** [{lop.lead_id}] -> `{lop.target_benefit_ref or lop.target_benefit_id}`")
                         elif lop.operation == "REJECT":
-                            st.write(f"- **[REJECT]** [{lop.lead_id}] 原因: {lop.rejection_reason}")
+                            st.write(f"- **[REJECT]** [{lop.lead_id}] 原因: {lop.reason or lop.rejection_reason}")
+                        elif lop.operation == "UPDATE":
+                            st.write(f"- **[UPDATE]** [{lop.lead_id}] 字段变更: `{json.dumps(lop.patch, ensure_ascii=False)}`")
                         else:
                             st.write(f"- **[{lop.operation}]** [{lop.lead_id}]")
 
@@ -139,6 +149,16 @@ if uploaded_file is not None:
             # 4. 覆盖记录与入口预览
             st.markdown(f"### 🌐 覆盖记录 (实际重检: {p['coverage_recheck_count']} | 复查未到期: {p['coverage_review_not_due_count']} | 盲区: {p['coverage_blind_spot_count']})")
             st.markdown(f"### 🏛️ 官方入口 (新增: {p['source_add_count']} | 更新: {p['source_update_count']} | 停用: {p['source_deprecate_count']})")
+            if p["source_updates"]:
+                with st.expander("查看官方入口变更明细", expanded=False):
+                    for sop in p["source_updates"]:
+                        if sop.operation == "ADD":
+                            st.write(f"- **[ADD]** [{sop.local_ref}] {sop.vendor} - {sop.product} ({sop.surface}) | {sop.source_name} (`{sop.url}`)")
+                        elif sop.operation == "UPDATE":
+                            st.write(f"- **[UPDATE]** [{sop.source_id}] 字段变更: `{json.dumps(sop.patch, ensure_ascii=False)}`")
+                        elif sop.operation == "DEPRECATE":
+                            st.write(f"- **[DEPRECATE]** [{sop.source_id}] 原因: {sop.reason}")
+
             st.markdown(f"### 📝 建议人工检查 ({p['manual_check_count']} 项)")
 
             # Warnings section
