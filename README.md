@@ -25,11 +25,11 @@
 ## 🏛️ 规约依据 (Canonical Sources)
 
 本项目严格遵循以下 5 个正式规约：
-1. `AI-福利监控规则-V1.2.1` (V1.2.1)
-2. `Vendor-Pool-V1.2` (V1.2 Final)
-3. `Search-Playbook-V1.2.1` (V1.2.1 Final)
-4. `AI-Benefit-Schema-V1.2.1` (V1.2.1 Final)
-5. `AI-Benefit-Data-Exchange-Protocol-V0.1` (V0.1)
+1. `AI 福利监控规则 V1.2.1` (V1.2.1)
+2. `Vendor Pool V1.2` (V1.2 Final)
+3. `Search Playbook V1.2.2` (V1.2.2 Final)
+4. `Benefit Schema V1.2.1` (V1.2.1 Final)
+5. `AI Benefit Data Exchange Protocol V0.1` (V0.1)
 
 ---
 
@@ -98,7 +98,7 @@ AI_Benefit_Randar/
 
 ---
 
-## 🧪 自动化测试验证 (TEST-001 ~ TEST-017)
+## 🧪 自动化测试验证 (TEST-001 ~ TEST-031)
 
 - `TEST-001`: 首次 EMPTY Context 可以正常导出
 - `TEST-002`: CREATE Benefit 入库后生成永久 benefit_id
@@ -117,3 +117,17 @@ AI_Benefit_Randar/
 - `TEST-015`: 事务中途失败 → 整体原子 rollback
 - `TEST-016`: 首次 Baseline 的长期既有福利不会被自动标 NEW
 - `TEST-017`: 用户所有可见主要状态显示中文
+- `TEST-018`: 未导出的未知 scan_id → FAIL
+- `TEST-019`: EMPTY Baseline 要求 BUILD_INITIAL_BASELINE
+- `TEST-020`: READY Baseline 拒绝 BUILD_INITIAL_BASELINE
+- `TEST-021`: 非法 package_type 被严格拒绝
+- `TEST-022`: 非法 Protocol 枚举值 Schema 级别阻断
+- `TEST-023`: Protocol 事件时间强制要求带时区 ISO8601
+- `TEST-024`: 存在 NOT_CHECKED 必然要求包含 SCAN_INCOMPLETE 且禁止 PUBLIC_COMPLETE
+- `TEST-025`: Scan Context 导出包含完整 benefit_index 身份字段
+- `TEST-026`: Vendor Deep Dive 正确裁剪 User Benefit State
+- `TEST-027`: 同一 Import 内 local_ref 全局唯一性校验 (跨类型)
+- `TEST-028`: Manual Check 引用不存在的 Benefit/Lead 校验阻断
+- `TEST-029`: BenefitRecord 包含多余字段 (extra=forbid) 阻断
+- `TEST-030`: scan_id 与 baseline_revision_at_export 强绑定校验
+- `TEST-031`: 初始基线全生命周期测试 (EMPTY -> Export -> Import -> READY -> rev+1 -> 幂等阻断)

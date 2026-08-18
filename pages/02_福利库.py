@@ -87,7 +87,7 @@ try:
             status_str = get_label(STATUS_LABELS, b.status)
             action_str = get_label(USER_ACTION_STATE_LABELS, current_action)
             
-            expander_title = f"[{b.benefit_id}] 【{b.vendor} - {b.product}】 {b.campaign_name} | {status_str} | 我的状态: {action_str}"
+            expander_title = f"[{b.benefit_id}] {b.vendor} - {b.product} | {b.campaign_name} | {status_str} | 我的状态: {action_str}"
             
             with st.expander(expander_title):
                 c_left, c_right = st.columns([2, 1])

@@ -49,3 +49,22 @@ def is_review_due(next_review_date_str: Optional[str], ref_date: Optional[date] 
         return False
     today = ref_date or date.today()
     return d <= today
+
+def is_valid_timezone_iso8601(ts_str: Optional[str]) -> bool:
+    """Check if string is a valid timezone-aware ISO8601 datetime (e.g. 2026-08-18T19:00:00+08:00 or 2026-08-18T19:00:00Z)."""
+    if not ts_str or not isinstance(ts_str, str):
+        return False
+    val = ts_str.strip()
+    if "T" not in val and "t" not in val:
+        return False
+    if val.endswith("Z") or val.endswith("z"):
+        val = val[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(val)
+        return dt.tzinfo is not None and dt.utcoffset() is not None
+    except Exception:
+        return False
+
+def now_timezone_iso() -> str:
+    """Return current datetime in ISO8601 format with local timezone offset."""
+    return datetime.now().astimezone().isoformat(timespec="seconds")

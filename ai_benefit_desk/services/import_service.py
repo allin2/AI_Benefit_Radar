@@ -161,10 +161,16 @@ class ImportService:
             if import_pkg.scan_result.context_baseline_revision != rev_before:
                 raise ValueError(f"基线版本冲突: 上下文基线为 {import_pkg.scan_result.context_baseline_revision}，当前数据库基线为 {rev_before}")
 
-            # 2. Check scan_id idempotency
-            existing_scan = db.query(ScanModel).filter_by(scan_id=import_pkg.scan_result.scan_id, import_status="COMMITTED").first()
-            if existing_scan:
+            # 2. Check scan_id existence, status & idempotency
+            scan_rec = db.query(ScanModel).filter_by(scan_id=import_pkg.scan_result.scan_id).first()
+            if not scan_rec:
+                raise ValueError(f"该 scan_id 不对应 Benefit Desk 已导出的扫描上下文。(scan_id: {import_pkg.scan_result.scan_id})")
+            if scan_rec.import_status == "COMMITTED":
                 raise ValueError(f"该扫描已经导入。(scan_id: {import_pkg.scan_result.scan_id})")
+            if scan_rec.import_status != "EXPORTED":
+                raise ValueError(f"扫描批次状态非法 ({scan_rec.import_status})，仅允许导入已导出且未提交的扫描。(scan_id: {import_pkg.scan_result.scan_id})")
+            if scan_rec.baseline_revision_at_export != import_pkg.scan_result.context_baseline_revision:
+                raise ValueError(f"扫描导出时的基线版本 ({scan_rec.baseline_revision_at_export}) 与导入包声明的上下文基线版本 ({import_pkg.scan_result.context_baseline_revision}) 不一致。")
 
             # 3. Pre-generate permanent IDs for local_refs
             for bop in import_pkg.benefit_changes:
@@ -437,14 +443,6 @@ class ImportService:
             db.add(audit_record)
 
             # 10. Update Scan Record
-            scan_rec = db.query(ScanModel).filter_by(scan_id=import_pkg.scan_result.scan_id).first()
-            if not scan_rec:
-                scan_rec = ScanModel(
-                    scan_id=import_pkg.scan_result.scan_id,
-                    requested_mode=import_pkg.scan_result.scan_mode,
-                    created_at=now
-                )
-                db.add(scan_rec)
             scan_rec.actual_scan_mode = import_pkg.scan_result.scan_mode
             scan_rec.baseline_action = import_pkg.scan_result.baseline_action
             scan_rec.imported_at = now

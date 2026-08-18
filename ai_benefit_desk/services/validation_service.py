@@ -44,32 +44,59 @@ class ValidationService:
         if import_pkg.benefit_schema_version != BENEFIT_SCHEMA_VERSION:
             result.add_error(f"福利Schema版本不兼容: 导入版本 {import_pkg.benefit_schema_version}，系统版本 {BENEFIT_SCHEMA_VERSION}")
 
-        # 2. Idempotency Check (scan_id)
+        # 2. scan_id Binding & Idempotency Check
         scan_id = import_pkg.scan_result.scan_id
-        existing_scan = db.query(ScanModel).filter_by(scan_id=scan_id, import_status="COMMITTED").first()
-        if existing_scan:
-            result.add_error(f"该扫描已经导入。(scan_id: {scan_id})")
+        scan_rec = db.query(ScanModel).filter_by(scan_id=scan_id).first()
+        if not scan_rec:
+            result.add_error(f"该 scan_id 不对应 Benefit Desk 已导出的扫描上下文。(scan_id: {scan_id})")
+        else:
+            if scan_rec.import_status == "COMMITTED":
+                result.add_error(f"该扫描已经导入。(scan_id: {scan_id})")
+            elif scan_rec.import_status != "EXPORTED":
+                result.add_error(f"扫描批次状态非法 ({scan_rec.import_status})，仅允许导入已导出且未提交的扫描。(scan_id: {scan_id})")
 
-        # 3. Baseline Revision Concurrency Check
+            # Check baseline_revision_at_export strictly equals context_baseline_revision
+            if scan_rec.baseline_revision_at_export != import_pkg.scan_result.context_baseline_revision:
+                result.add_error(
+                    f"扫描导出时的基线版本 ({scan_rec.baseline_revision_at_export}) 与导入包声明的上下文基线版本 ({import_pkg.scan_result.context_baseline_revision}) 不一致。"
+                )
+
+        # 3. Baseline State ↔ Baseline Action Consistency & Current DB Revision Check
         sys_state = db.query(SystemStateModel).filter_by(id=1).first()
         current_rev = sys_state.baseline_revision if sys_state else 0
         baseline_state = sys_state.baseline_state if sys_state else "EMPTY"
+        
         if import_pkg.scan_result.context_baseline_revision != current_rev:
             result.add_error(
                 f"扫描上下文已经过期，当前数据库基线已发生变化。(导入基线: {import_pkg.scan_result.context_baseline_revision}, 数据库当前基线: {current_rev})"
             )
 
-        # 4. Coverage & Scan Completion Consistency
+        baseline_action = import_pkg.scan_result.baseline_action
+        if baseline_state == "EMPTY" and baseline_action != "BUILD_INITIAL_BASELINE":
+            result.add_error("当前系统基线为空 (EMPTY)，扫描动作必须为 BUILD_INITIAL_BASELINE。")
+        elif baseline_state == "READY" and baseline_action != "UPDATE_EXISTING_BASELINE":
+            result.add_error("当前系统基线已就绪 (READY)，扫描动作必须为 UPDATE_EXISTING_BASELINE。")
+
+        # 4. Coverage & Scan Completion Consistency (NOT_CHECKED Gate)
         scan_statuses = set(import_pkg.scan_result.scan_statuses)
         has_not_checked = any(c.coverage_state == "NOT_CHECKED" for c in import_pkg.coverage_events)
-        if has_not_checked and "PUBLIC_COMPLETE" in scan_statuses:
-            result.add_error("存在关键待检查 (NOT_CHECKED) 项时，扫描状态不能声明为公开扫描完成 (PUBLIC_COMPLETE)")
+        if has_not_checked:
+            if "SCAN_INCOMPLETE" not in scan_statuses:
+                result.add_error("存在关键待检查 (NOT_CHECKED) 项时，扫描状态必须包含 SCAN_INCOMPLETE")
+            if "PUBLIC_COMPLETE" in scan_statuses:
+                result.add_error("存在关键待检查 (NOT_CHECKED) 项时，扫描状态不能声明为公开扫描完成 (PUBLIC_COMPLETE)")
 
-        # 5. Mode-specific & REVIEW_NOT_DUE Coverage Gate
+        # 5. Mode-specific & REVIEW_NOT_DUE Coverage Gate & Source ID Existence
         is_deep_scan = (import_pkg.scan_result.scan_mode == "DEEP_FULL_SCAN")
         today = date.today()
 
         for cov in import_pkg.coverage_events:
+            # Cross-reference check: source_id
+            if cov.source_id:
+                s_exist = db.query(CanonicalSourceModel).filter_by(source_id=cov.source_id).first()
+                if not s_exist:
+                    result.add_error(f"Coverage 引用的 source_id 不存在: {cov.source_id}")
+
             if cov.coverage_state == "REVIEW_NOT_DUE":
                 # Condition 1 & 2: Prohibit in DEEP_FULL_SCAN or non-FULL_SCAN
                 if is_deep_scan or import_pkg.scan_result.scan_mode != "FULL_SCAN":
@@ -122,18 +149,23 @@ class ValidationService:
                         result.coverage_gate_failures.append({"vendor": cov.vendor, "product": cov.product, "surface": cov.surface, "reason": msg})
                         continue
 
-        # 6. Local Ref Uniqueness & Benefit Operations Validation
-        local_refs = set()
+        # 6. Global Local Ref Uniqueness & Benefit Operations Validation
+        global_local_refs = set()
         created_benefit_refs = set()
+
+        def check_local_ref(ref: Optional[str], op_name: str) -> bool:
+            if not ref:
+                result.add_error(f"{op_name} 操作必须包含 local_ref")
+                return False
+            if ref in global_local_refs:
+                result.add_error(f"同一个 Import 内 local_ref 必须全局唯一: 重复的 local_ref {ref}")
+                return False
+            global_local_refs.add(ref)
+            return True
 
         for bop in import_pkg.benefit_changes:
             if bop.operation == "CREATE":
-                if not bop.local_ref:
-                    result.add_error("Benefit CREATE 操作必须包含 local_ref")
-                elif bop.local_ref in local_refs:
-                    result.add_error(f"同一个 Import 内 local_ref 必须唯一: 重复的 local_ref {bop.local_ref}")
-                else:
-                    local_refs.add(bop.local_ref)
+                if check_local_ref(bop.local_ref, "Benefit CREATE"):
                     created_benefit_refs.add(bop.local_ref)
 
                 if not bop.record:
@@ -206,12 +238,7 @@ class ValidationService:
         # 7. Lead Operations Validation
         for lop in import_pkg.lead_changes:
             if lop.operation == "CREATE":
-                if not lop.local_ref:
-                    result.add_error("Lead CREATE 操作必须包含 local_ref")
-                elif lop.local_ref in local_refs:
-                    result.add_error(f"同一个 Import 内 local_ref 必须唯一: 重复的 local_ref {lop.local_ref}")
-                else:
-                    local_refs.add(lop.local_ref)
+                check_local_ref(lop.local_ref, "Lead CREATE")
                 if not lop.record:
                     result.add_error(f"Lead CREATE 操作必须包含 record 对象: {lop.local_ref}")
 
@@ -259,12 +286,7 @@ class ValidationService:
         # 8. Source Updates Validation
         for sop in import_pkg.source_updates:
             if sop.operation == "ADD":
-                if not sop.local_ref:
-                    result.add_error("Source ADD 操作必须包含 local_ref")
-                elif sop.local_ref in local_refs:
-                    result.add_error(f"同一个 Import 内 local_ref 必须唯一: {sop.local_ref}")
-                else:
-                    local_refs.add(sop.local_ref)
+                check_local_ref(sop.local_ref, "Source ADD")
                 if not sop.record:
                     result.add_error(f"Source ADD 必须提供 record 对象: {sop.local_ref}")
             elif sop.operation == "UPDATE":
@@ -283,5 +305,23 @@ class ValidationService:
                     s_exist = db.query(CanonicalSourceModel).filter_by(source_id=sop.source_id).first()
                     if not s_exist:
                         result.add_error(f"Source DEPRECATE 指定的 source_id 不存在: {sop.source_id}")
+
+        # 9. Manual Check Items Validation
+        for mop in import_pkg.manual_check_items:
+            if mop.local_ref:
+                if mop.local_ref in global_local_refs:
+                    result.add_error(f"同一个 Import 内 local_ref 必须全局唯一: 重复的 local_ref {mop.local_ref}")
+                else:
+                    global_local_refs.add(mop.local_ref)
+
+            if mop.related_benefit_id:
+                b_exist = db.query(BenefitModel).filter_by(benefit_id=mop.related_benefit_id).first()
+                if not b_exist:
+                    result.add_error(f"Manual Check 引用的 related_benefit_id 不存在: {mop.related_benefit_id}")
+
+            if mop.related_lead_id:
+                l_exist = db.query(LeadModel).filter_by(lead_id=mop.related_lead_id).first()
+                if not l_exist:
+                    result.add_error(f"Manual Check 引用的 related_lead_id 不存在: {mop.related_lead_id}")
 
         return result

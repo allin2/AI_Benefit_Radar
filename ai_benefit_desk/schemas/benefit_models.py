@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from ai_benefit_desk.utils.date_utils import is_valid_date_or_unknown
 
 VALID_BENEFIT_TYPES = {
@@ -54,6 +54,7 @@ VALID_CHANGE_TYPES = {
 VALID_RISK_LEVELS = {"NONE", "LOW", "MEDIUM", "HIGH", "UNKNOWN"}
 
 class BenefitRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     benefit_id: Optional[str] = None
     vendor: str
     product: str = "UNKNOWN"

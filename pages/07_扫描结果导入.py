@@ -34,7 +34,7 @@ if uploaded_file is not None:
             st.success("✅ **校验通过！** 已生成导入预览，请核对后确认提交入库。")
 
             # 1. 扫描结果总览
-            st.markdown("### 📊 【扫描结果】")
+            st.markdown("### 📊 扫描结果")
             sc1, sc2, sc3, sc4 = st.columns(4)
             with sc1:
                 st.write(f"**扫描批次 ID:** `{p['scan_id']}`")
@@ -52,7 +52,7 @@ if uploaded_file is not None:
             st.markdown("---")
 
             # 2. 已确认福利预览
-            st.markdown(f"### 🎁 【福利事实】 (新增: {p['benefit_create_count']} | 更新: {p['benefit_update_count']} | 复核无变化: {p['benefit_no_change_count']})")
+            st.markdown(f"### 🎁 福利事实 (新增: {p['benefit_create_count']} | 更新: {p['benefit_update_count']} | 复核无变化: {p['benefit_no_change_count']})")
             
             # Dedup resolutions dictionary
             dedup_resolutions = {}
@@ -78,10 +78,10 @@ if uploaded_file is not None:
 
             with st.expander("查看福利变更明细", expanded=True):
                 for bop in p["benefit_changes"]:
-                    op_tag = f"【{bop.operation}】"
+                    op_tag = f"[{bop.operation}]"
                     if bop.operation == "CREATE" and bop.record:
                         rec = bop.record
-                        st.markdown(f"**{op_tag}** [{bop.local_ref}] 【{rec.vendor} - {rec.product}】 {rec.campaign_name}")
+                        st.markdown(f"**{op_tag}** [{bop.local_ref}] {rec.vendor} - {rec.product} | {rec.campaign_name}")
                         st.caption(f"内容: {rec.benefit_detail} | 类型: {rec.benefit_type} | 状态: {rec.status} | 来源等级: {rec.source_level}")
                     elif bop.operation == "UPDATE":
                         st.markdown(f"**{op_tag}** [{bop.benefit_id}] 字段变更: `{json.dumps(bop.patch, ensure_ascii=False)}`")
@@ -91,30 +91,30 @@ if uploaded_file is not None:
             st.markdown("---")
 
             # 3. 线索队列预览
-            st.markdown(f"### 🔍 【线索队列】 (新增: {p['lead_create_count']} | 更新: {p['lead_update_count']} | 转福利: {p['lead_resolve_count']} | 驳回: {p['lead_reject_count']})")
+            st.markdown(f"### 🔍 线索队列 (新增: {p['lead_create_count']} | 更新: {p['lead_update_count']} | 转福利: {p['lead_resolve_count']} | 驳回: {p['lead_reject_count']})")
             if p["lead_changes"]:
                 with st.expander("查看线索变更明细", expanded=False):
                     for lop in p["lead_changes"]:
                         if lop.operation == "CREATE" and lop.record:
-                            st.write(f"- **【CREATE】** [{lop.local_ref}] {lop.record.lead_summary}")
+                            st.write(f"- **[CREATE]** [{lop.local_ref}] {lop.record.lead_summary}")
                         elif lop.operation == "RESOLVE_TO_BENEFIT":
-                            st.write(f"- **【RESOLVE_TO_BENEFIT】** [{lop.lead_id}] -> `{lop.target_benefit_ref or lop.target_benefit_id}`")
+                            st.write(f"- **[RESOLVE_TO_BENEFIT]** [{lop.lead_id}] -> `{lop.target_benefit_ref or lop.target_benefit_id}`")
                         elif lop.operation == "REJECT":
-                            st.write(f"- **【REJECT】** [{lop.lead_id}] 原因: {lop.rejection_reason}")
+                            st.write(f"- **[REJECT]** [{lop.lead_id}] 原因: {lop.rejection_reason}")
                         else:
-                            st.write(f"- **【{lop.operation}】** [{lop.lead_id}]")
+                            st.write(f"- **[{lop.operation}]** [{lop.lead_id}]")
 
             st.markdown("---")
 
             # 4. 覆盖记录与入口预览
-            st.markdown(f"### 🌐 【覆盖记录】 (实际重检: {p['coverage_recheck_count']} | 复查未到期: {p['coverage_review_not_due_count']} | 盲区: {p['coverage_blind_spot_count']})")
-            st.markdown(f"### 🏛️ 【官方入口】 (新增: {p['source_add_count']} | 更新: {p['source_update_count']} | 停用: {p['source_deprecate_count']})")
-            st.markdown(f"### 📝 【建议人工检查】 ({p['manual_check_count']} 项)")
+            st.markdown(f"### 🌐 覆盖记录 (实际重检: {p['coverage_recheck_count']} | 复查未到期: {p['coverage_review_not_due_count']} | 盲区: {p['coverage_blind_spot_count']})")
+            st.markdown(f"### 🏛️ 官方入口 (新增: {p['source_add_count']} | 更新: {p['source_update_count']} | 停用: {p['source_deprecate_count']})")
+            st.markdown(f"### 📝 建议人工检查 ({p['manual_check_count']} 项)")
 
             # Warnings section
             if preview_data["warnings"]:
                 st.markdown("---")
-                st.markdown("### ⚠️ 【结构化警告提示】")
+                st.markdown("### ⚠️ 结构化警告提示")
                 for w in preview_data["warnings"]:
                     w_type = w.get("type", "OTHER")
                     w_msg = w.get("message_zh", "")

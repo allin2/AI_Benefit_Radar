@@ -73,8 +73,8 @@
       "surface": "Free / Signup",
       "region": "GLOBAL",
       "coverage_state": "CHECKED_FOUND",
-      "scan_observed_at": "2026-08-18",
-      "actual_checked_at": "2026-08-18",
+      "scan_observed_at": "2026-08-18T18:00:00+08:00",
+      "actual_checked_at": "2026-08-18T18:00:00+08:00",
       "next_review_at": "2026-09-18",
       "source_id": null,
       "basis_coverage_id": null,
@@ -94,10 +94,11 @@
         "source_type": "PRICING",
         "source_level": "S",
         "status": "ACTIVE",
-        "last_verified_at": "2026-08-18"
+        "last_verified_at": "2026-08-18T18:00:00+08:00"
       }
     }
   ],
   "manual_check_items": [],
   "warnings": []
 }
+

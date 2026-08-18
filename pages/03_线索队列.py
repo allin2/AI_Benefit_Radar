@@ -28,7 +28,7 @@ try:
             verif_str = get_label(VERIFICATION_STATUS_LABELS, lead.verification_status)
             status_str = get_label(LEAD_STATUS_LABELS, lead.status)
             
-            exp_title = f"[{lead.lead_id}] 【{lead.vendor} - {lead.product}】 {lead.lead_summary[:40]}... | 状态: {status_str} | 可信度: {verif_str}"
+            exp_title = f"[{lead.lead_id}] {lead.vendor} - {lead.product} | {lead.lead_summary[:40]}... | 状态: {status_str} | 可信度: {verif_str}"
             
             with st.expander(exp_title, expanded=(lead.status == "OPEN")):
                 c1, c2 = st.columns([2, 1])

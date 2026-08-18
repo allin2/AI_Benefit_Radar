@@ -119,8 +119,8 @@ def test_full_e2e_acceptance_loop():
                     "surface": "Client Reward",
                     "region": "CN",
                     "coverage_state": "CHECKED_FOUND",
-                    "scan_observed_at": "2026-08-18",
-                    "actual_checked_at": "2026-08-18"
+                    "scan_observed_at": "2026-08-18T18:25:00+08:00",
+                    "actual_checked_at": "2026-08-18T18:25:00+08:00"
                 }
             ],
             "source_updates": [
@@ -135,7 +135,8 @@ def test_full_e2e_acceptance_loop():
                         "url": "https://trae.cn/activity",
                         "source_type": "ACTIVITY_CENTER",
                         "source_level": "S",
-                        "status": "ACTIVE"
+                        "status": "ACTIVE",
+                        "last_verified_at": "2026-08-18T18:25:00+08:00"
                     }
                 }
             ],

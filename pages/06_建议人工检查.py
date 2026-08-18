@@ -32,7 +32,7 @@ try:
             
             p_icon = "🔴" if m.priority == "HIGH" else ("🟡" if m.priority == "MEDIUM" else "🟢")
             
-            exp_title = f"{p_icon} [{m.manual_check_id}] 【{m.vendor} - {m.product}】 {m.reason[:35]}... | 渠道: {ch_label} | 优先级: {p_label} | 状态: {st_label}"
+            exp_title = f"{p_icon} [{m.manual_check_id}] {m.vendor} - {m.product} | {m.reason[:35]}... | 渠道: {ch_label} | 优先级: {p_label} | 状态: {st_label}"
             
             with st.expander(exp_title, expanded=(m.status == "OPEN")):
                 c1, c2 = st.columns([2, 1])

@@ -65,7 +65,7 @@ try:
             status_label = get_label(SOURCE_STATUS_LABELS, s.status)
             is_active = (s.status == "ACTIVE")
             
-            exp_title = f"[{s.source_id}] 【{s.vendor} - {s.product}】 {s.source_name} ({s.surface}) | 状态: {status_label}"
+            exp_title = f"[{s.source_id}] {s.vendor} - {s.product} | {s.source_name} ({s.surface}) | 状态: {status_label}"
             
             with st.expander(exp_title, expanded=False):
                 col_info, col_action = st.columns([3, 1])

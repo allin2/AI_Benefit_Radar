@@ -1,6 +1,7 @@
 import pytest
 import json
 from datetime import date
+from pydantic import ValidationError
 from ai_benefit_desk.db.models import (
     BenefitModel, LeadModel, CoverageHistoryModel, CanonicalSourceModel,
     UserBenefitStateModel, ScanModel, ImportAuditModel, SystemStateModel
@@ -9,13 +10,34 @@ from ai_benefit_desk.services.export_service import ExportService
 from ai_benefit_desk.services.import_service import ImportService
 from ai_benefit_desk.services.validation_service import ValidationService
 from ai_benefit_desk.services.dedup_service import DedupService
+from ai_benefit_desk.schemas.benefit_models import BenefitRecord
+from ai_benefit_desk.schemas.protocol_models import (
+    ScanContextPackage, ScanImportPackage, CoverageEventItem, ManualCheckItem, EvidenceItem
+)
 from ai_benefit_desk.utils.enum_labels import (
     VERIFICATION_STATUS_LABELS, STATUS_LABELS, COVERAGE_STATE_LABELS, USER_ACTION_STATE_LABELS
 )
 from ai_benefit_desk.utils.json_utils import dumps_json
 
 # Helper to create sample import payload
-def make_sample_import(scan_id="SCAN-20260818-001", mode="FULL_SCAN", rev=0, baseline_action="UPDATE_EXISTING_BASELINE"):
+def make_sample_import(db_session, scan_id="SCAN-20260818-001", mode="FULL_SCAN", rev=0, baseline_action=None):
+    sys_state = db_session.query(SystemStateModel).filter_by(id=1).first()
+    state = sys_state.baseline_state if sys_state else "EMPTY"
+    if baseline_action is None:
+        baseline_action = "BUILD_INITIAL_BASELINE" if state == "EMPTY" else "UPDATE_EXISTING_BASELINE"
+
+    # Pre-register scan record in EXPORTED state if not exists
+    existing = db_session.query(ScanModel).filter_by(scan_id=scan_id).first()
+    if not existing:
+        scan_rec = ScanModel(
+            scan_id=scan_id,
+            requested_mode=mode,
+            baseline_revision_at_export=rev,
+            import_status="EXPORTED"
+        )
+        db_session.add(scan_rec)
+        db_session.commit()
+
     return {
         "protocol_version": "0.1",
         "benefit_schema_version": "1.2.1",
@@ -53,7 +75,7 @@ def test_001_empty_context_export(db_session):
 
 # TEST-002: CREATE Benefit 入库后生成永久 benefit_id
 def test_002_create_benefit_generates_id(db_session):
-    payload = make_sample_import("SCAN-20260818-001", rev=0)
+    payload = make_sample_import(db_session, "SCAN-20260818-001", rev=0)
     payload["benefit_changes"].append({
         "operation": "CREATE",
         "local_ref": "BNEW-001",
@@ -95,7 +117,7 @@ def test_002_create_benefit_generates_id(db_session):
 
 # TEST-003: UPDATE 不存在 benefit_id → FAIL
 def test_003_update_nonexistent_benefit_fails(db_session):
-    payload = make_sample_import("SCAN-20260818-002", rev=0)
+    payload = make_sample_import(db_session, "SCAN-20260818-002", rev=0)
     payload["benefit_changes"].append({
         "operation": "UPDATE",
         "benefit_id": "BEN-999999",
@@ -111,7 +133,7 @@ def test_003_update_nonexistent_benefit_fails(db_session):
 
 # TEST-004: 同一个 scan_id 再次导入被幂等拦截
 def test_004_idempotent_scan_import_blocked(db_session):
-    payload = make_sample_import("SCAN-20260818-003", rev=0)
+    payload = make_sample_import(db_session, "SCAN-20260818-003", rev=0)
     raw_json = dumps_json(payload)
 
     # First import
@@ -128,7 +150,7 @@ def test_004_idempotent_scan_import_blocked(db_session):
 # TEST-005: baseline_revision 不匹配产生 BASELINE_CONFLICT
 def test_005_baseline_revision_conflict(db_session):
     # DB current rev is 0, payload context_baseline_revision is 5
-    payload = make_sample_import("SCAN-20260818-004", rev=5)
+    payload = make_sample_import(db_session, "SCAN-20260818-004", rev=5)
     raw_json = dumps_json(payload)
 
     preview = ImportService.parse_and_preview(db_session, raw_json)
@@ -138,15 +160,15 @@ def test_005_baseline_revision_conflict(db_session):
 # TEST-006: REVIEW_NOT_DUE 不得刷新 actual_checked_at
 def test_006_review_not_due_preserves_actual_checked_at(db_session):
     # Setup initial baseline with historical checked_at
-    payload1 = make_sample_import("SCAN-20260818-005", rev=0, baseline_action="BUILD_INITIAL_BASELINE")
+    payload1 = make_sample_import(db_session, "SCAN-20260818-005", rev=0, baseline_action="BUILD_INITIAL_BASELINE")
     payload1["coverage_events"].append({
         "vendor": "Google",
         "product": "Gemini",
         "surface": "Web Pricing",
         "region": "GLOBAL",
         "coverage_state": "CHECKED_FOUND",
-        "scan_observed_at": "2026-08-01",
-        "actual_checked_at": "2026-08-01",
+        "scan_observed_at": "2026-08-01T10:00:00+08:00",
+        "actual_checked_at": "2026-08-01T10:00:00+08:00",
         "next_review_at": "2026-08-30"
     })
     raw_1 = dumps_json(payload1)
@@ -154,15 +176,15 @@ def test_006_review_not_due_preserves_actual_checked_at(db_session):
     ImportService.commit_import(db_session, p1["import_pkg"], raw_1)
 
     # Next scan: full scan with REVIEW_NOT_DUE
-    payload2 = make_sample_import("SCAN-20260818-006", mode="FULL_SCAN", rev=1)
+    payload2 = make_sample_import(db_session, "SCAN-20260818-006", mode="FULL_SCAN", rev=1)
     payload2["coverage_events"].append({
         "vendor": "Google",
         "product": "Gemini",
         "surface": "Web Pricing",
         "region": "GLOBAL",
         "coverage_state": "REVIEW_NOT_DUE",
-        "scan_observed_at": "2026-08-18",
-        "actual_checked_at": "2026-08-18",  # Scan tried to send today's date
+        "scan_observed_at": "2026-08-18T18:00:00+08:00",
+        "actual_checked_at": "2026-08-18T18:00:00+08:00",  # Scan tried to send today's date
         "basis_coverage_id": "COV-000001"
     })
     raw_2 = dumps_json(payload2)
@@ -173,19 +195,19 @@ def test_006_review_not_due_preserves_actual_checked_at(db_session):
     cov_latest = db_session.query(CoverageHistoryModel).filter_by(coverage_id="COV-000002").first()
     assert cov_latest is not None
     # Must preserve basis coverage's historical check time
-    assert cov_latest.actual_checked_at == "2026-08-01"
+    assert cov_latest.actual_checked_at == "2026-08-01T10:00:00+08:00"
 
 # TEST-007: DEEP_FULL_SCAN 中禁止使用 REVIEW_NOT_DUE
 def test_007_deep_scan_prohibits_review_not_due(db_session):
-    payload = make_sample_import("SCAN-20260818-007", mode="DEEP_FULL_SCAN", rev=0)
+    payload = make_sample_import(db_session, "SCAN-20260818-007", mode="DEEP_FULL_SCAN", rev=0)
     payload["coverage_events"].append({
         "vendor": "Google",
         "product": "Gemini",
         "surface": "Web Pricing",
         "region": "GLOBAL",
         "coverage_state": "REVIEW_NOT_DUE",
-        "scan_observed_at": "2026-08-18",
-        "actual_checked_at": "2026-08-18",
+        "scan_observed_at": "2026-08-18T18:00:00+08:00",
+        "actual_checked_at": "2026-08-18T18:00:00+08:00",
         "basis_coverage_id": "COV-000001"
     })
     raw_json = dumps_json(payload)
@@ -213,7 +235,7 @@ def test_008_confirm_no_change_validation(db_session):
     db_session.add(b)
     db_session.commit()
 
-    payload = make_sample_import("SCAN-20260818-008", rev=0)
+    payload = make_sample_import(db_session, "SCAN-20260818-008", rev=0)
     payload["benefit_changes"].append({
         "operation": "CONFIRM_NO_CHANGE",
         "benefit_id": "BEN-000001",
@@ -232,7 +254,7 @@ def test_008_confirm_no_change_validation(db_session):
 
 # TEST-009: Evidence Gate 拦截无 S/A 证据的 CONFIRMED
 def test_009_evidence_gate_warning(db_session):
-    payload = make_sample_import("SCAN-20260818-009", rev=0)
+    payload = make_sample_import(db_session, "SCAN-20260818-009", rev=0)
     payload["benefit_changes"].append({
         "operation": "CREATE",
         "local_ref": "BNEW-001",
@@ -249,7 +271,16 @@ def test_009_evidence_gate_warning(db_session):
             "source_level": "C",  # Level C, but marked CONFIRMED!
             "verification_status": "CONFIRMED",
             "status": "ACTIVE"
-        }
+        },
+        "evidence": [
+            {
+                "url": "https://reddit.com/r/ai",
+                "source_level": "C",
+                "source_role": "PRIMARY",
+                "checked_at": "2026-08-18T17:20:00+08:00",
+                "supports_fields": ["status"]
+            }
+        ]
     })
     raw_json = dumps_json(payload)
     preview = ImportService.parse_and_preview(db_session, raw_json)
@@ -273,7 +304,7 @@ def test_010_lead_resolve_to_new_benefit(db_session):
     db_session.add(lead)
     db_session.commit()
 
-    payload = make_sample_import("SCAN-20260818-010", rev=0)
+    payload = make_sample_import(db_session, "SCAN-20260818-010", rev=0)
     payload["benefit_changes"].append({
         "operation": "CREATE",
         "local_ref": "BNEW-001",
@@ -342,7 +373,7 @@ def test_011_lead_resolve_to_existing_benefit(db_session):
     db_session.add(lead)
     db_session.commit()
 
-    payload = make_sample_import("SCAN-20260818-011", rev=0)
+    payload = make_sample_import(db_session, "SCAN-20260818-011", rev=0)
     payload["lead_changes"].append({
         "operation": "RESOLVE_TO_BENEFIT",
         "lead_id": "LEAD-000002",
@@ -373,7 +404,7 @@ def test_012_source_deprecate_retains_record(db_session):
     db_session.add(src)
     db_session.commit()
 
-    payload = make_sample_import("SCAN-20260818-012", rev=0)
+    payload = make_sample_import(db_session, "SCAN-20260818-012", rev=0)
     payload["source_updates"].append({
         "operation": "DEPRECATE",
         "source_id": "SRC-000001"
@@ -416,7 +447,7 @@ def test_013_user_benefit_state_protected(db_session):
     db_session.commit()
 
     # Scan reports benefit status is now ENDED
-    payload = make_sample_import("SCAN-20260818-013", rev=0)
+    payload = make_sample_import(db_session, "SCAN-20260818-013", rev=0)
     payload["benefit_changes"].append({
         "operation": "UPDATE",
         "benefit_id": "BEN-000001",
@@ -461,7 +492,7 @@ def test_014_create_candidate_duplicate_detection(db_session):
     db_session.commit()
 
     # Import proposes CREATE for identical vendor + product + campaign
-    payload = make_sample_import("SCAN-20260818-014", rev=0)
+    payload = make_sample_import(db_session, "SCAN-20260818-014", rev=0)
     payload["benefit_changes"].append({
         "operation": "CREATE",
         "local_ref": "BNEW-DUP",
@@ -489,7 +520,7 @@ def test_014_create_candidate_duplicate_detection(db_session):
 
 # TEST-015: 事务原子性 (出异常全量 Rollback)
 def test_015_atomic_transaction_rollback(db_session):
-    payload = make_sample_import("SCAN-20260818-015", rev=0)
+    payload = make_sample_import(db_session, "SCAN-20260818-015", rev=0)
     payload["benefit_changes"].append({
         "operation": "CREATE",
         "local_ref": "BNEW-001",
@@ -528,7 +559,7 @@ def test_015_atomic_transaction_rollback(db_session):
 
 # TEST-016: 首次 BUILD_INITIAL_BASELINE 自动将 NEW 转为 UNKNOWN
 def test_016_initial_baseline_change_type(db_session):
-    payload = make_sample_import("SCAN-20260818-016", rev=0, baseline_action="BUILD_INITIAL_BASELINE")
+    payload = make_sample_import(db_session, "SCAN-20260818-016", rev=0, baseline_action="BUILD_INITIAL_BASELINE")
     payload["benefit_changes"].append({
         "operation": "CREATE",
         "local_ref": "BNEW-001",
@@ -561,3 +592,431 @@ def test_017_chinese_status_labels():
     assert STATUS_LABELS["ACTIVE"] == "有效"
     assert COVERAGE_STATE_LABELS["REVIEW_NOT_DUE"] == "复查未到期"
     assert USER_ACTION_STATE_LABELS["CLAIMED"] == "已领取"
+
+# TEST-018: 未导出的未知 scan_id → FAIL
+def test_018_unknown_scan_id_rejected(db_session):
+    payload = {
+        "protocol_version": "0.1",
+        "benefit_schema_version": "1.2.1",
+        "package_type": "SCAN_IMPORT",
+        "scan_result": {
+            "scan_id": "SCAN-UNKNOWN-999",
+            "scan_mode": "FULL_SCAN",
+            "context_baseline_revision": 0,
+            "generated_at": "2026-08-18T18:00:00+08:00",
+            "scan_statuses": ["PUBLIC_COMPLETE"],
+            "baseline_action": "BUILD_INITIAL_BASELINE"
+        },
+        "benefit_changes": [],
+        "lead_changes": [],
+        "coverage_events": [],
+        "source_updates": [],
+        "manual_check_items": [],
+        "warnings": []
+    }
+    raw_json = dumps_json(payload)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    assert preview["is_valid"] is False
+    assert any("该 scan_id 不对应 Benefit Desk 已导出的扫描上下文" in e for e in preview["errors"])
+
+# TEST-019: EMPTY Baseline 要求 BUILD_INITIAL_BASELINE
+def test_019_empty_baseline_requires_build_initial_baseline(db_session):
+    sys_state = db_session.query(SystemStateModel).filter_by(id=1).first()
+    assert sys_state.baseline_state == "EMPTY"
+
+    payload = make_sample_import(db_session, "SCAN-20260818-019", rev=0, baseline_action="UPDATE_EXISTING_BASELINE")
+    raw_json = dumps_json(payload)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    assert preview["is_valid"] is False
+    assert any("当前系统基线为空" in e for e in preview["errors"])
+
+# TEST-020: READY Baseline 拒绝 BUILD_INITIAL_BASELINE
+def test_020_ready_baseline_rejects_build_initial_baseline(db_session):
+    sys_state = db_session.query(SystemStateModel).filter_by(id=1).first()
+    sys_state.baseline_state = "READY"
+    sys_state.baseline_revision = 1
+    db_session.commit()
+
+    payload = make_sample_import(db_session, "SCAN-20260818-020", rev=1, baseline_action="BUILD_INITIAL_BASELINE")
+    raw_json = dumps_json(payload)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    assert preview["is_valid"] is False
+    assert any("当前系统基线已就绪" in e for e in preview["errors"])
+
+
+# TEST-021: 非法 package_type 被严格拒绝
+def test_021_invalid_package_type_rejected(db_session):
+    payload = make_sample_import(db_session, "SCAN-20260818-021", rev=0)
+    payload["package_type"] = "INVALID_PACKAGE_TYPE"
+    raw_json = dumps_json(payload)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    assert preview["is_valid"] is False
+    assert any("package_type" in e or "数据结构不符合" in e for e in preview["errors"])
+
+# TEST-022: 非法 Protocol 枚举值 Schema 级别阻断
+def test_022_invalid_protocol_enums_rejected(db_session):
+    # Invalid coverage state
+    with pytest.raises(ValidationError):
+        CoverageEventItem(
+            vendor="Test",
+            product="Test",
+            surface="Test",
+            region="GLOBAL",
+            coverage_state="BANANA",  # Invalid enum
+            scan_observed_at="2026-08-18T18:00:00+08:00",
+            actual_checked_at="2026-08-18T18:00:00+08:00"
+        )
+
+    # Invalid manual check priority
+    with pytest.raises(ValidationError):
+        ManualCheckItem(
+            vendor="Test",
+            product="Test",
+            channel="WEB",
+            reason="Test reason",
+            priority="SUPER_HIGH",  # Invalid enum
+            suggested_action="Test action",
+            status="OPEN"
+        )
+
+# TEST-023: Protocol 事件时间强制要求带时区 ISO8601
+def test_023_protocol_timestamp_requires_timezone():
+    # Plain date rejected
+    with pytest.raises(ValidationError):
+        EvidenceItem(
+            url="https://test.com",
+            source_level="S",
+            source_role="PRIMARY",
+            checked_at="2026-08-18",  # Plain date without time and timezone
+            supports_fields=["status"]
+        )
+
+    # Naive timestamp without timezone offset rejected
+    with pytest.raises(ValidationError):
+        EvidenceItem(
+            url="https://test.com",
+            source_level="S",
+            source_role="PRIMARY",
+            checked_at="2026-08-18T18:00:00",  # No timezone offset
+            supports_fields=["status"]
+        )
+
+    # Valid timezone-aware timestamp accepted
+    ev = EvidenceItem(
+        url="https://test.com",
+        source_level="S",
+        source_role="PRIMARY",
+        checked_at="2026-08-18T18:00:00+08:00",
+        supports_fields=["status"]
+    )
+    assert ev.checked_at == "2026-08-18T18:00:00+08:00"
+
+# TEST-024: 存在 NOT_CHECKED 必然要求包含 SCAN_INCOMPLETE 且禁止 PUBLIC_COMPLETE
+def test_024_not_checked_requires_scan_incomplete(db_session):
+    payload = make_sample_import(db_session, "SCAN-20260818-024", rev=0)
+    payload["scan_result"]["scan_statuses"] = ["PUBLIC_COMPLETE", "OVERALL_PARTIAL"]
+    payload["coverage_events"].append({
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "surface": "Pricing",
+        "region": "GLOBAL",
+        "coverage_state": "NOT_CHECKED",
+        "scan_observed_at": "2026-08-18T18:00:00+08:00"
+    })
+    raw_json = dumps_json(payload)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    assert preview["is_valid"] is False
+    assert any("存在关键待检查 (NOT_CHECKED) 项时，扫描状态不能声明为公开扫描完成" in e for e in preview["errors"])
+
+    # When marked with SCAN_INCOMPLETE and without PUBLIC_COMPLETE -> should pass gate
+    payload2 = make_sample_import(db_session, "SCAN-20260818-024B", rev=0)
+    payload2["scan_result"]["scan_statuses"] = ["SCAN_INCOMPLETE", "OVERALL_PARTIAL"]
+    payload2["coverage_events"].append({
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "surface": "Pricing",
+        "region": "GLOBAL",
+        "coverage_state": "NOT_CHECKED",
+        "scan_observed_at": "2026-08-18T18:00:00+08:00"
+    })
+    preview2 = ImportService.parse_and_preview(db_session, dumps_json(payload2))
+    assert preview2["is_valid"] is True
+
+# TEST-025: Scan Context 导出包含完整 benefit_index 身份字段
+def test_025_benefit_index_identity_fields(db_session):
+    b = BenefitModel(
+        benefit_id="BEN-000100",
+        vendor="DeepSeek",
+        product="Coder",
+        campaign_name="Free API Quota",
+        benefit_type="API_CREDITS",
+        benefit_detail="免费点数",
+        linked_vendor="Volcengine",
+        linked_product="Ark",
+        wallet="API Credits",
+        regions=["CN", "GLOBAL"],
+        start_date="2026-01-01",
+        end_date="2026-12-31",
+        first_seen="2026-01-01",
+        last_checked="2026-08-01",
+        next_review_date="2026-09-01",
+        official_source="https://deepseek.com",
+        source_level="S",
+        verification_status="CONFIRMED",
+        status="ACTIVE"
+    )
+    db_session.add(b)
+    db_session.commit()
+
+    context = ExportService.generate_scan_context(db_session)
+    assert len(context.benefit_index) == 1
+    idx = context.benefit_index[0]
+    assert idx.benefit_id == "BEN-000100"
+    assert idx.vendor == "DeepSeek"
+    assert idx.product == "Coder"
+    assert idx.campaign_name == "Free API Quota"
+    assert idx.benefit_type == "API_CREDITS"
+    assert idx.linked_vendor == "Volcengine"
+    assert idx.linked_product == "Ark"
+    assert idx.regions == ["CN", "GLOBAL"]
+    assert idx.status == "ACTIVE"
+    assert idx.start_date == "2026-01-01"
+    assert idx.end_date == "2026-12-31"
+    assert idx.last_checked == "2026-08-01"
+    assert idx.next_review_date == "2026-09-01"
+
+# TEST-026: Vendor Deep Dive 正确裁剪 User Benefit State
+def test_026_vendor_deep_dive_user_state_pruning(db_session):
+    b1 = BenefitModel(
+        benefit_id="BEN-000101",
+        vendor="OpenAI",
+        product="ChatGPT",
+        campaign_name="Plus",
+        benefit_type="FREE_ACCESS",
+        benefit_detail="Detail",
+        first_seen="2026-08-01",
+        last_checked="2026-08-01",
+        official_source="https://openai.com",
+        source_level="S",
+        verification_status="CONFIRMED",
+        status="ACTIVE"
+    )
+    b2 = BenefitModel(
+        benefit_id="BEN-000102",
+        vendor="Anthropic",
+        product="Claude",
+        campaign_name="Pro",
+        benefit_type="FREE_ACCESS",
+        benefit_detail="Detail",
+        first_seen="2026-08-01",
+        last_checked="2026-08-01",
+        official_source="https://anthropic.com",
+        source_level="S",
+        verification_status="CONFIRMED",
+        status="ACTIVE"
+    )
+    db_session.add_all([b1, b2])
+    db_session.flush()
+
+    u1 = UserBenefitStateModel(benefit_id="BEN-000101", action_state="CLAIMED")
+    u2 = UserBenefitStateModel(benefit_id="BEN-000102", action_state="INTERESTED")
+    db_session.add_all([u1, u2])
+    db_session.commit()
+
+    # Vendor Deep Dive on OpenAI only
+    context = ExportService.generate_scan_context(db_session, requested_mode="VENDOR_DEEP_DIVE", vendor_filter="OpenAI")
+    assert len(context.benefit_index) == 1
+    assert context.benefit_index[0].vendor == "OpenAI"
+    assert len(context.user_benefit_states) == 1
+    assert context.user_benefit_states[0].benefit_id == "BEN-000101"
+
+# TEST-027: 同一 Import 内 local_ref 全局唯一性校验 (跨类型)
+def test_027_local_ref_global_uniqueness(db_session):
+    payload = make_sample_import(db_session, "SCAN-20260818-027", rev=0)
+    payload["benefit_changes"].append({
+        "operation": "CREATE",
+        "local_ref": "REF-DUPLICATE",
+        "record": {
+            "benefit_id": None,
+            "vendor": "OpenAI",
+            "product": "ChatGPT",
+            "campaign_name": "Plus",
+            "benefit_type": "FREE_ACCESS",
+            "benefit_detail": "Detail",
+            "first_seen": "2026-08-18",
+            "last_checked": "2026-08-18",
+            "official_source": "https://openai.com",
+            "source_level": "S",
+            "verification_status": "CONFIRMED",
+            "status": "ACTIVE"
+        }
+    })
+    payload["manual_check_items"].append({
+        "local_ref": "REF-DUPLICATE",  # Duplicate local_ref across Benefit and ManualCheck
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "channel": "IDE",
+        "reason": "Check something",
+        "priority": "LOW",
+        "suggested_action": "Check IDE",
+        "status": "OPEN"
+    })
+    raw_json = dumps_json(payload)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    assert preview["is_valid"] is False
+    assert any("必须全局唯一" in e for e in preview["errors"])
+
+# TEST-028: Manual Check 引用不存在的 Benefit/Lead 校验阻断
+def test_028_invalid_manual_check_reference(db_session):
+    payload = make_sample_import(db_session, "SCAN-20260818-028", rev=0)
+    payload["manual_check_items"].append({
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "channel": "IDE",
+        "reason": "Check benefit",
+        "priority": "LOW",
+        "suggested_action": "Check",
+        "status": "OPEN",
+        "related_benefit_id": "BEN-999999"  # Non-existent
+    })
+    raw_json = dumps_json(payload)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    assert preview["is_valid"] is False
+    assert any("related_benefit_id 不存在" in e for e in preview["errors"])
+
+# TEST-029: BenefitRecord 包含多余字段 (extra=forbid) 阻断
+def test_029_benefit_record_extra_fields_rejected():
+    with pytest.raises(ValidationError):
+        BenefitRecord(
+            vendor="OpenAI",
+            product="ChatGPT",
+            campaign_name="Plus",
+            benefit_type="FREE_ACCESS",
+            benefit_detail="Detail",
+            first_seen="2026-08-18",
+            last_checked="2026-08-18",
+            official_source="https://openai.com",
+            source_level="S",
+            verification_status="CONFIRMED",
+            status="ACTIVE",
+            coverage_state="CHECKED_FOUND"  # Forbidden extra field!
+        )
+
+# TEST-030: scan_id 与 baseline_revision_at_export 强绑定校验
+def test_030_scan_id_revision_binding(db_session):
+    # Pre-register scan exported at revision 10
+    scan_rec = ScanModel(
+        scan_id="SCAN-20260818-030",
+        requested_mode="FULL_SCAN",
+        baseline_revision_at_export=10,
+        import_status="EXPORTED"
+    )
+    db_session.add(scan_rec)
+    db_session.commit()
+
+    # Import package claims context_baseline_revision = 9
+    payload = {
+        "protocol_version": "0.1",
+        "benefit_schema_version": "1.2.1",
+        "package_type": "SCAN_IMPORT",
+        "scan_result": {
+            "scan_id": "SCAN-20260818-030",
+            "scan_mode": "FULL_SCAN",
+            "context_baseline_revision": 9,  # Mismatch with export revision 10!
+            "generated_at": "2026-08-18T18:00:00+08:00",
+            "scan_statuses": ["PUBLIC_COMPLETE"],
+            "baseline_action": "UPDATE_EXISTING_BASELINE"
+        },
+        "benefit_changes": [],
+        "lead_changes": [],
+        "coverage_events": [],
+        "source_updates": [],
+        "manual_check_items": [],
+        "warnings": []
+    }
+    raw_json = dumps_json(payload)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    assert preview["is_valid"] is False
+    assert any("导出时的基线版本" in e for e in preview["errors"])
+
+# TEST-031: 初始基线全生命周期测试 (EMPTY -> Export -> Import -> READY -> rev+1 -> 幂等阻断)
+def test_031_initial_baseline_lifecycle(db_session):
+    # 1. Start from clean EMPTY state
+    sys_state = db_session.query(SystemStateModel).filter_by(id=1).first()
+    assert sys_state.baseline_state == "EMPTY"
+    assert sys_state.baseline_revision == 0
+
+    # 2. Desk generates Scan Context
+    context_pkg = ExportService.generate_scan_context(db_session, requested_mode="DEEP_FULL_SCAN")
+    assert context_pkg.scan.baseline_state == "EMPTY"
+    assert context_pkg.scan.baseline_revision == 0
+    scan_id = context_pkg.scan.scan_id
+
+    # 3. ChatGPT returns Scan Import
+    import_payload = {
+        "protocol_version": "0.1",
+        "benefit_schema_version": "1.2.1",
+        "package_type": "SCAN_IMPORT",
+        "scan_result": {
+            "scan_id": scan_id,
+            "scan_mode": "DEEP_FULL_SCAN",
+            "context_baseline_revision": 0,
+            "generated_at": "2026-08-18T18:25:00+08:00",
+            "scan_statuses": ["PUBLIC_COMPLETE", "OVERALL_PARTIAL"],
+            "baseline_action": "BUILD_INITIAL_BASELINE",
+            "summary_notes": "初始全量基线扫描"
+        },
+        "benefit_changes": [
+            {
+                "operation": "CREATE",
+                "local_ref": "BNEW-001",
+                "record": {
+                    "benefit_id": None,
+                    "vendor": "OpenAI",
+                    "product": "ChatGPT",
+                    "campaign_name": "Free Tier",
+                    "benefit_type": "FREE_ACCESS",
+                    "benefit_detail": "免费使用",
+                    "first_seen": "2026-08-18",
+                    "last_checked": "2026-08-18",
+                    "official_source": "https://openai.com",
+                    "source_level": "S",
+                    "verification_status": "CONFIRMED",
+                    "status": "ACTIVE",
+                    "change_type": "NEW"
+                }
+            }
+        ],
+        "lead_changes": [],
+        "coverage_events": [
+            {
+                "vendor": "OpenAI",
+                "product": "ChatGPT",
+                "surface": "Web Pricing",
+                "region": "GLOBAL",
+                "coverage_state": "CHECKED_FOUND",
+                "scan_observed_at": "2026-08-18T18:20:00+08:00",
+                "actual_checked_at": "2026-08-18T18:20:00+08:00"
+            }
+        ],
+        "source_updates": [],
+        "manual_check_items": [],
+        "warnings": []
+    }
+    raw_import_json = dumps_json(import_payload)
+
+    # 4. Preview and commit
+    preview = ImportService.parse_and_preview(db_session, raw_import_json)
+    assert preview["is_valid"] is True
+    commit_res = ImportService.commit_import(db_session, preview["import_pkg"], raw_import_json)
+    assert commit_res["success"] is True
+
+    # 5. System State is now READY and rev is 1
+    sys_state = db_session.query(SystemStateModel).filter_by(id=1).first()
+    assert sys_state.baseline_state == "READY"
+    assert sys_state.baseline_revision == 1
+
+    # 6. Re-import of same scan_id blocked
+    preview_dup = ImportService.parse_and_preview(db_session, raw_import_json)
+    assert preview_dup["is_valid"] is False
+    assert any("该扫描已经导入" in e for e in preview_dup["errors"])

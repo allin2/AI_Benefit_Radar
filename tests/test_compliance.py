@@ -20,6 +20,18 @@ def load_fixture(filename: str) -> str:
     with open(FIXTURES_DIR / filename, "r", encoding="utf-8") as f:
         return f.read()
 
+def ensure_exported_scan(db_session, scan_id: str, rev: int = 0, mode: str = "FULL_SCAN"):
+    existing = db_session.query(ScanModel).filter_by(scan_id=scan_id).first()
+    if not existing:
+        scan_rec = ScanModel(
+            scan_id=scan_id,
+            requested_mode=mode,
+            baseline_revision_at_export=rev,
+            import_status="EXPORTED"
+        )
+        db_session.add(scan_rec)
+        db_session.commit()
+
 # COMPLIANCE-001: canonical SCAN_CONTEXT 最小 JSON 能够成功 parse，Export 再生成字段和 canonical 一致
 def test_compliance_001_scan_context_golden(db_session):
     raw = load_fixture("canonical_scan_context_v0_1.json")
@@ -36,6 +48,7 @@ def test_compliance_001_scan_context_golden(db_session):
 
 # COMPLIANCE-002: canonical SCAN_IMPORT 最小 JSON 能够成功 parse
 def test_compliance_002_scan_import_golden(db_session):
+    ensure_exported_scan(db_session, "SCAN-20260818-001", rev=0)
     raw = load_fixture("canonical_scan_import_v0_1.json")
     preview = ImportService.parse_and_preview(db_session, raw)
     assert preview["is_valid"] is True
@@ -53,6 +66,7 @@ def test_compliance_003_invalid_legacy_scan_import_fails(db_session):
 # COMPLIANCE-004: UPDATE 只 patch end_date，数据库其他 Benefit 字段保持不变
 def test_compliance_004_update_patch_semantics(db_session):
     # Setup initial benefit
+    ensure_exported_scan(db_session, "SCAN-20260818-001", rev=0)
     raw_init = load_fixture("canonical_scan_import_v0_1.json")
     p_init = ImportService.parse_and_preview(db_session, raw_init)
     ImportService.commit_import(db_session, p_init["import_pkg"], raw_init)
@@ -64,6 +78,7 @@ def test_compliance_004_update_patch_semantics(db_session):
     orig_status = b_before.status
 
     # Apply patch
+    ensure_exported_scan(db_session, "SCAN-20260818-002", rev=1)
     raw_patch = load_fixture("canonical_scan_import_update_patch_v0_1.json")
     p_patch = ImportService.parse_and_preview(db_session, raw_patch)
     assert p_patch["is_valid"] is True
@@ -81,6 +96,13 @@ def test_compliance_004_update_patch_semantics(db_session):
 
 # COMPLIANCE-005: UPDATE 不存在 benefit_id → FAIL
 def test_compliance_005_update_nonexistent_fails(db_session):
+    # Setup baseline ready first
+    sys_state = db_session.query(SystemStateModel).filter_by(id=1).first()
+    sys_state.baseline_state = "READY"
+    sys_state.baseline_revision = 1
+    db_session.commit()
+
+    ensure_exported_scan(db_session, "SCAN-20260818-005", rev=1)
     payload = {
         "protocol_version": "0.1",
         "benefit_schema_version": "1.2.1",
@@ -88,7 +110,7 @@ def test_compliance_005_update_nonexistent_fails(db_session):
         "scan_result": {
             "scan_id": "SCAN-20260818-005",
             "scan_mode": "FULL_SCAN",
-            "context_baseline_revision": 0,
+            "context_baseline_revision": 1,
             "generated_at": "2026-08-18T18:00:00+08:00",
             "scan_statuses": ["PUBLIC_COMPLETE"],
             "baseline_action": "UPDATE_EXISTING_BASELINE"
@@ -112,6 +134,7 @@ def test_compliance_005_update_nonexistent_fails(db_session):
 
 # COMPLIANCE-006: CREATE benefit_id != null → FAIL
 def test_compliance_006_create_with_non_null_id_fails(db_session):
+    ensure_exported_scan(db_session, "SCAN-20260818-001", rev=0)
     raw = load_fixture("canonical_scan_import_v0_1.json")
     data = loads_json(raw)
     data["benefit_changes"][0]["record"]["benefit_id"] = "BEN-000001"
@@ -121,6 +144,7 @@ def test_compliance_006_create_with_non_null_id_fails(db_session):
 
 # COMPLIANCE-007: CONFIRMED + 只有 C evidence → 默认 Evidence Gate 阻止确认导入
 def test_compliance_007_evidence_gate_blocking(db_session):
+    ensure_exported_scan(db_session, "SCAN-20260818-001", rev=0)
     raw = load_fixture("canonical_scan_import_v0_1.json")
     data = loads_json(raw)
     data["benefit_changes"][0]["record"]["source_level"] = "C"
@@ -139,12 +163,14 @@ def test_compliance_007_evidence_gate_blocking(db_session):
 
 # COMPLIANCE-008: CONFIRMED + S evidence → 通过 Evidence Gate
 def test_compliance_008_evidence_gate_passes_with_s(db_session):
+    ensure_exported_scan(db_session, "SCAN-20260818-001", rev=0)
     raw = load_fixture("canonical_scan_import_v0_1.json")
     preview = ImportService.parse_and_preview(db_session, raw)
     assert preview["is_valid"] is True
 
 # COMPLIANCE-009: 人工 Evidence Override 只有明确用户操作才能继续并保存 Audit
 def test_compliance_009_evidence_override_audited(db_session):
+    ensure_exported_scan(db_session, "SCAN-20260818-001", rev=0)
     raw = load_fixture("canonical_scan_import_v0_1.json")
     data = loads_json(raw)
     data["benefit_changes"][0]["record"]["source_level"] = "C"
@@ -169,16 +195,19 @@ def test_compliance_009_evidence_override_audited(db_session):
 
 # COMPLIANCE-010: FULL_SCAN + 合法 REVIEW_NOT_DUE 通过，actual_checked_at 保持旧值
 def test_compliance_010_review_not_due_passes(db_session):
-    # 1. Setup initial import with basis coverage COV-000001 (actual_checked_at = 2026-08-15)
+    # 1. Setup initial import with basis coverage COV-000001 (actual_checked_at = 2026-08-15T10:00:00+08:00)
+    ensure_exported_scan(db_session, "SCAN-20260818-001", rev=0)
     raw_init = load_fixture("canonical_scan_import_v0_1.json")
     data_init = loads_json(raw_init)
-    data_init["coverage_events"][0]["actual_checked_at"] = "2026-08-15"
+    data_init["coverage_events"][0]["actual_checked_at"] = "2026-08-15T10:00:00+08:00"
+    data_init["coverage_events"][0]["scan_observed_at"] = "2026-08-15T10:00:00+08:00"
     data_init["coverage_events"][0]["next_review_at"] = "2026-09-30"
     raw_i = dumps_json(data_init)
     p_init = ImportService.parse_and_preview(db_session, raw_i)
     ImportService.commit_import(db_session, p_init["import_pkg"], raw_i)
 
     # 2. Re-import with REVIEW_NOT_DUE referencing COV-000001
+    ensure_exported_scan(db_session, "SCAN-20260818-003", rev=1)
     raw_rnd = load_fixture("canonical_scan_import_review_not_due_v0_1.json")
     data_rnd = loads_json(raw_rnd)
     data_rnd["scan_result"]["context_baseline_revision"] = 1
@@ -189,7 +218,7 @@ def test_compliance_010_review_not_due_passes(db_session):
 
     cov2 = db_session.query(CoverageHistoryModel).filter_by(coverage_state="REVIEW_NOT_DUE").first()
     assert cov2 is not None
-    assert cov2.actual_checked_at == "2026-08-15"  # Preserved!
+    assert cov2.actual_checked_at == "2026-08-15T10:00:00+08:00"  # Preserved!
 
 # COMPLIANCE-011: DEEP_FULL_SCAN + REVIEW_NOT_DUE → FAIL
 def test_compliance_011_deep_scan_prohibits_review_not_due(db_session):
@@ -199,6 +228,7 @@ def test_compliance_011_deep_scan_prohibits_review_not_due(db_session):
     sys_state.baseline_revision = 2
     db_session.commit()
 
+    ensure_exported_scan(db_session, "SCAN-20260818-003", rev=2, mode="DEEP_FULL_SCAN")
     raw_rnd = load_fixture("canonical_scan_import_review_not_due_v0_1.json")
     data_rnd = loads_json(raw_rnd)
     data_rnd["scan_result"]["scan_mode"] = "DEEP_FULL_SCAN"
@@ -213,6 +243,7 @@ def test_compliance_012_review_not_due_no_basis_fails(db_session):
     sys_state.baseline_revision = 2
     db_session.commit()
 
+    ensure_exported_scan(db_session, "SCAN-20260818-003", rev=2)
     raw_rnd = load_fixture("canonical_scan_import_review_not_due_v0_1.json")
     data_rnd = loads_json(raw_rnd)
     data_rnd["coverage_events"][0]["basis_coverage_id"] = None
@@ -236,12 +267,13 @@ def test_compliance_013_basis_coverage_mismatch_fails(db_session):
         surface="Free / Signup",
         region="GLOBAL",
         coverage_state="CHECKED_FOUND",
-        scan_observed_at="2026-08-01",
-        actual_checked_at="2026-08-01"
+        scan_observed_at="2026-08-01T10:00:00+08:00",
+        actual_checked_at="2026-08-01T10:00:00+08:00"
     )
     db_session.add(c)
     db_session.commit()
 
+    ensure_exported_scan(db_session, "SCAN-20260818-003", rev=2)
     raw_rnd = load_fixture("canonical_scan_import_review_not_due_v0_1.json")
     data_rnd = loads_json(raw_rnd)
     # Basis coverage points to Google Gemini, but event is OpenAI ChatGPT
@@ -265,13 +297,14 @@ def test_compliance_014_review_not_due_overdue_fails(db_session):
         surface="Free / Signup",
         region="GLOBAL",
         coverage_state="CHECKED_FOUND",
-        scan_observed_at="2026-08-01",
-        actual_checked_at="2026-08-01",
+        scan_observed_at="2026-08-01T10:00:00+08:00",
+        actual_checked_at="2026-08-01T10:00:00+08:00",
         next_review_at="2026-08-10"  # Expired/overdue!
     )
     db_session.add(c)
     db_session.commit()
 
+    ensure_exported_scan(db_session, "SCAN-20260818-003", rev=2)
     raw_rnd = load_fixture("canonical_scan_import_review_not_due_v0_1.json")
     data_rnd = loads_json(raw_rnd)
     data_rnd["coverage_events"][0]["basis_coverage_id"] = "COV-000088"
@@ -284,13 +317,18 @@ def test_compliance_015_empty_baseline_prohibits_review_not_due(db_session):
     sys_state = db_session.query(SystemStateModel).filter_by(id=1).first()
     assert sys_state.baseline_state == "EMPTY"
 
+    ensure_exported_scan(db_session, "SCAN-20260818-003", rev=0)
     raw_rnd = load_fixture("canonical_scan_import_review_not_due_v0_1.json")
-    preview = ImportService.parse_and_preview(db_session, raw_rnd)
+    data_rnd = loads_json(raw_rnd)
+    data_rnd["scan_result"]["context_baseline_revision"] = 0
+    data_rnd["scan_result"]["baseline_action"] = "BUILD_INITIAL_BASELINE"
+    preview = ImportService.parse_and_preview(db_session, dumps_json(data_rnd))
     assert preview["is_valid"] is False
     assert any("首次建立基线 (EMPTY) 时禁止使用 REVIEW_NOT_DUE" in e for e in preview["errors"])
 
 # COMPLIANCE-016: 关键 NOT_CHECKED + PUBLIC_COMPLETE 产生阻塞错误
 def test_compliance_016_not_checked_public_complete_fails(db_session):
+    ensure_exported_scan(db_session, "SCAN-20260818-001", rev=0)
     raw = load_fixture("canonical_scan_import_v0_1.json")
     data = loads_json(raw)
     data["coverage_events"].append({
@@ -300,8 +338,8 @@ def test_compliance_016_not_checked_public_complete_fails(db_session):
         "surface": "API Credits",
         "region": "GLOBAL",
         "coverage_state": "NOT_CHECKED",
-        "scan_observed_at": "2026-08-18",
-        "actual_checked_at": "UNKNOWN"
+        "scan_observed_at": "2026-08-18T18:00:00+08:00",
+        "actual_checked_at": None
     })
     preview = ImportService.parse_and_preview(db_session, dumps_json(data))
     assert preview["is_valid"] is False
@@ -309,6 +347,7 @@ def test_compliance_016_not_checked_public_complete_fails(db_session):
 
 # COMPLIANCE-017: PUBLIC_COMPLETE + OVERALL_PARTIAL + BLIND_SPOT 合法
 def test_compliance_017_blind_spot_partial_valid(db_session):
+    ensure_exported_scan(db_session, "SCAN-20260818-001", rev=0)
     raw = load_fixture("canonical_scan_import_v0_1.json")
     data = loads_json(raw)
     data["coverage_events"].append({
@@ -318,8 +357,8 @@ def test_compliance_017_blind_spot_partial_valid(db_session):
         "surface": "Hidden Account",
         "region": "GLOBAL",
         "coverage_state": "BLIND_SPOT",
-        "scan_observed_at": "2026-08-18",
-        "actual_checked_at": "2026-08-18"
+        "scan_observed_at": "2026-08-18T18:00:00+08:00",
+        "actual_checked_at": "2026-08-18T18:00:00+08:00"
     })
     preview = ImportService.parse_and_preview(db_session, dumps_json(data))
     assert preview["is_valid"] is True
@@ -340,9 +379,11 @@ def test_compliance_018_lead_resolve_to_new_benefit(db_session):
     db_session.add(lead)
     db_session.commit()
 
+    ensure_exported_scan(db_session, "SCAN-20260818-004", rev=0)
     raw = load_fixture("canonical_scan_import_lead_resolve_v0_1.json")
     data = loads_json(raw)
     data["scan_result"]["context_baseline_revision"] = 0
+    data["scan_result"]["baseline_action"] = "BUILD_INITIAL_BASELINE"
     raw_json = dumps_json(data)
     preview = ImportService.parse_and_preview(db_session, raw_json)
     assert preview["is_valid"] is True
@@ -354,6 +395,11 @@ def test_compliance_018_lead_resolve_to_new_benefit(db_session):
 
 # COMPLIANCE-019: Lead target_benefit_id 正确 resolve 到历史 Benefit
 def test_compliance_019_lead_resolve_to_existing_benefit(db_session):
+    sys_state = db_session.query(SystemStateModel).filter_by(id=1).first()
+    sys_state.baseline_state = "READY"
+    sys_state.baseline_revision = 1
+    db_session.commit()
+
     b = BenefitModel(
         benefit_id="BEN-000077",
         vendor="Google",
@@ -383,6 +429,7 @@ def test_compliance_019_lead_resolve_to_existing_benefit(db_session):
     db_session.add(lead)
     db_session.commit()
 
+    ensure_exported_scan(db_session, "SCAN-20260818-019", rev=1)
     payload = {
         "protocol_version": "0.1",
         "benefit_schema_version": "1.2.1",
@@ -390,7 +437,7 @@ def test_compliance_019_lead_resolve_to_existing_benefit(db_session):
         "scan_result": {
             "scan_id": "SCAN-20260818-019",
             "scan_mode": "FULL_SCAN",
-            "context_baseline_revision": 0,
+            "context_baseline_revision": 1,
             "generated_at": "2026-08-18T18:00:00+08:00",
             "scan_statuses": ["PUBLIC_COMPLETE"],
             "baseline_action": "UPDATE_EXISTING_BASELINE"
@@ -418,6 +465,7 @@ def test_compliance_019_lead_resolve_to_existing_benefit(db_session):
 
 # COMPLIANCE-020: target_benefit_ref + target_benefit_id 同时出现 → FAIL
 def test_compliance_020_lead_resolve_conflict_fails(db_session):
+    ensure_exported_scan(db_session, "SCAN-20260818-020", rev=0)
     payload = {
         "protocol_version": "0.1",
         "benefit_schema_version": "1.2.1",
@@ -428,7 +476,7 @@ def test_compliance_020_lead_resolve_conflict_fails(db_session):
             "context_baseline_revision": 0,
             "generated_at": "2026-08-18T18:00:00+08:00",
             "scan_statuses": ["PUBLIC_COMPLETE"],
-            "baseline_action": "UPDATE_EXISTING_BASELINE"
+            "baseline_action": "BUILD_INITIAL_BASELINE"
         },
         "benefit_changes": [],
         "lead_changes": [
@@ -450,6 +498,7 @@ def test_compliance_020_lead_resolve_conflict_fails(db_session):
 
 # COMPLIANCE-021: warnings 输出为结构化对象，不是 string list
 def test_compliance_021_structured_warnings(db_session):
+    ensure_exported_scan(db_session, "SCAN-20260818-001", rev=0)
     raw = load_fixture("canonical_scan_import_v0_1.json")
     data = loads_json(raw)
     data["warnings"] = [
@@ -469,6 +518,7 @@ def test_compliance_021_structured_warnings(db_session):
 
 # COMPLIANCE-022: 重复 scan_id 第二次导入失败
 def test_compliance_022_duplicate_scan_id_blocked(db_session):
+    ensure_exported_scan(db_session, "SCAN-20260818-001", rev=0)
     raw = load_fixture("canonical_scan_import_v0_1.json")
     preview1 = ImportService.parse_and_preview(db_session, raw)
     ImportService.commit_import(db_session, preview1["import_pkg"], raw)
@@ -479,6 +529,7 @@ def test_compliance_022_duplicate_scan_id_blocked(db_session):
 
 # COMPLIANCE-023: baseline_revision mismatch 检测冲突
 def test_compliance_023_baseline_mismatch_detected(db_session):
+    ensure_exported_scan(db_session, "SCAN-20260818-001", rev=0)
     raw = load_fixture("canonical_scan_import_v0_1.json")
     data = loads_json(raw)
     data["scan_result"]["context_baseline_revision"] = 99  # Mismatch!
@@ -488,6 +539,7 @@ def test_compliance_023_baseline_mismatch_detected(db_session):
 
 # COMPLIANCE-024: Import 不修改 CLAIMED (User Benefit State)
 def test_compliance_024_user_benefit_state_isolation(db_session):
+    ensure_exported_scan(db_session, "SCAN-20260818-001", rev=0)
     raw = load_fixture("canonical_scan_import_v0_1.json")
     p1 = ImportService.parse_and_preview(db_session, raw)
     ImportService.commit_import(db_session, p1["import_pkg"], raw)
@@ -498,6 +550,7 @@ def test_compliance_024_user_benefit_state_isolation(db_session):
     db_session.commit()
 
     # Import patch that updates status to EXPIRED
+    ensure_exported_scan(db_session, "SCAN-20260818-002", rev=1)
     raw_patch = load_fixture("canonical_scan_import_update_patch_v0_1.json")
     p_patch = ImportService.parse_and_preview(db_session, raw_patch)
     ImportService.commit_import(db_session, p_patch["import_pkg"], raw_patch)
@@ -508,6 +561,7 @@ def test_compliance_024_user_benefit_state_isolation(db_session):
 
 # COMPLIANCE-025: 事务中途异常整体 rollback
 def test_compliance_025_atomic_rollback(db_session):
+    ensure_exported_scan(db_session, "SCAN-20260818-001", rev=0)
     raw = load_fixture("canonical_scan_import_v0_1.json")
     data = loads_json(raw)
     data["source_updates"].append({
@@ -528,6 +582,7 @@ def test_compliance_025_atomic_rollback(db_session):
 
 # COMPLIANCE-026: 首次 BUILD_INITIAL_BASELINE 长期既有 Benefit 不被自动强改成 NEW
 def test_compliance_026_initial_baseline_change_type(db_session):
+    ensure_exported_scan(db_session, "SCAN-20260818-001", rev=0)
     raw = load_fixture("canonical_scan_import_v0_1.json")
     data = loads_json(raw)
     data["benefit_changes"][0]["record"]["change_type"] = "NEW"

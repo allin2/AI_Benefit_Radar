@@ -1,7 +1,7 @@
-from datetime import datetime, date
+from datetime import datetime, date, timedelta, timezone
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
-from ai_benefit_desk.config import PROTOCOL_VERSION, BENEFIT_SCHEMA_VERSION
+from ai_benefit_desk.config import PROTOCOL_VERSION, BENEFIT_SCHEMA_VERSION, RECENT_IDENTITY_LOOKBACK_DAYS
 from ai_benefit_desk.db.models import (
     BenefitModel, LeadModel, CoverageHistoryModel, CanonicalSourceModel,
     UserBenefitStateModel, ManualCheckModel, ScanModel, SystemStateModel
@@ -12,7 +12,7 @@ from ai_benefit_desk.schemas.protocol_models import (
     CoverageEventItem, CanonicalSourceItem, UserBenefitStateItem, ManualCheckItem
 )
 from ai_benefit_desk.services.id_service import IdService
-from ai_benefit_desk.utils.date_utils import is_review_due, today_str
+from ai_benefit_desk.utils.date_utils import is_review_due, parse_date, now_timezone_iso
 
 class ExportService:
     @staticmethod
@@ -21,8 +21,9 @@ class ExportService:
         requested_mode: str = "FULL_SCAN",
         vendor_filter: Optional[str] = None
     ) -> ScanContextPackage:
-        now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        now_iso = now_timezone_iso()
         today = date.today()
+        lookback_cutoff = today - timedelta(days=RECENT_IDENTITY_LOOKBACK_DAYS)
         
         # 1. System state
         sys_state = db.query(SystemStateModel).filter_by(id=1).first()
@@ -43,11 +44,19 @@ class ExportService:
         db.add(scan_record)
         db.commit()
 
-        # 3. Benefit Index (Lightweight identity index)
+        # 3. Benefit Index (Lightweight identity index with identity fields & lookback pruning)
         all_benefits_query = db.query(BenefitModel)
         if vendor_filter:
             all_benefits_query = all_benefits_query.filter(BenefitModel.vendor == vendor_filter)
         all_benefits = all_benefits_query.all()
+
+        def is_identity_relevant(b: BenefitModel) -> bool:
+            if b.status in ("ACTIVE", "EXPIRING_SOON", "UPCOMING", "WAITLIST", "UNKNOWN"):
+                return True
+            d = parse_date(b.end_date) or parse_date(b.last_checked)
+            if d is None:
+                return True
+            return d >= lookback_cutoff
 
         benefit_index = [
             BenefitIndexItem(
@@ -55,12 +64,19 @@ class ExportService:
                 vendor=b.vendor,
                 product=b.product,
                 campaign_name=b.campaign_name,
-                wallet=b.wallet,
+                benefit_type=b.benefit_type,
+                wallet=b.wallet or "UNKNOWN",
+                linked_vendor=b.linked_vendor or "UNKNOWN",
+                linked_product=b.linked_product or "UNKNOWN",
+                regions=b.regions,
                 status=b.status,
+                start_date=b.start_date or "UNKNOWN",
+                end_date=b.end_date or "UNKNOWN",
                 last_checked=b.last_checked,
-                next_review_date=b.next_review_date
+                next_review_date=b.next_review_date or "UNKNOWN"
             )
             for b in all_benefits
+            if is_identity_relevant(b)
         ]
 
         # 4. Review Items (Pruned to items needing re-verification)
@@ -185,15 +201,21 @@ class ExportService:
             for s in sources_query.all()
         ]
 
-        # 8. User Benefit States (Read-only)
+        # 8. User Benefit States (Read-only, vendor-filtered)
+        if vendor_filter:
+            relevant_b_ids = {b.benefit_id for b in all_benefits}
+            user_state_models = db.query(UserBenefitStateModel).filter(UserBenefitStateModel.benefit_id.in_(relevant_b_ids)).all() if relevant_b_ids else []
+        else:
+            user_state_models = db.query(UserBenefitStateModel).all()
+
         user_states = [
             UserBenefitStateItem(
                 benefit_id=u.benefit_id,
                 action_state=u.action_state,
                 notes=u.notes or "",
-                updated_at=u.updated_at.isoformat() if u.updated_at else None
+                updated_at=(u.updated_at.replace(tzinfo=timezone.utc).isoformat() if u.updated_at else None)
             )
-            for u in db.query(UserBenefitStateModel).all()
+            for u in user_state_models
         ]
 
         # 9. Open Manual Checks
