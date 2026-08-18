@@ -4,7 +4,7 @@ from datetime import date
 from pydantic import ValidationError
 from ai_benefit_desk.db.models import (
     BenefitModel, LeadModel, CoverageHistoryModel, CanonicalSourceModel,
-    UserBenefitStateModel, ScanModel, ImportAuditModel, SystemStateModel
+    UserBenefitStateModel, ManualCheckModel, ScanModel, ImportAuditModel, SystemStateModel
 )
 from ai_benefit_desk.services.export_service import ExportService
 from ai_benefit_desk.services.import_service import ImportService
@@ -18,6 +18,8 @@ from ai_benefit_desk.utils.enum_labels import (
     VERIFICATION_STATUS_LABELS, STATUS_LABELS, COVERAGE_STATE_LABELS, USER_ACTION_STATE_LABELS
 )
 from ai_benefit_desk.utils.json_utils import dumps_json
+from ai_benefit_desk.utils.date_utils import is_valid_timezone_iso8601, today_str
+
 
 # Helper to create sample import payload
 def make_sample_import(db_session, scan_id="SCAN-20260818-001", mode="FULL_SCAN", rev=0, baseline_action=None):
@@ -1020,3 +1022,260 @@ def test_031_initial_baseline_lifecycle(db_session):
     preview_dup = ImportService.parse_and_preview(db_session, raw_import_json)
     assert preview_dup["is_valid"] is False
     assert any("该扫描已经导入" in e for e in preview_dup["errors"])
+
+# TEST-032: REVIEW_NOT_DUE requires concrete next_review_at
+def test_032_review_not_due_requires_concrete_next_review_at(db_session):
+    sys_state = db_session.query(SystemStateModel).filter_by(id=1).first()
+    sys_state.baseline_state = "READY"
+    sys_state.baseline_revision = 1
+    db_session.commit()
+
+    basis_cov = CoverageHistoryModel(
+        coverage_id="COV-000032",
+        scan_id="SCAN-HISTORICAL",
+        vendor="OpenAI",
+        product="ChatGPT",
+        wallet="UNKNOWN",
+        surface="Pricing",
+        region="GLOBAL",
+        coverage_state="CHECKED_NONE",
+        scan_observed_at="2026-08-10T10:00:00+08:00",
+        actual_checked_at="2026-08-10T10:00:00+08:00",
+        next_review_at="UNKNOWN"
+    )
+    db_session.add(basis_cov)
+    db_session.commit()
+
+    # Case A: next_review_at = null in basis
+    basis_cov.next_review_at = None
+    db_session.commit()
+
+    payload_a = make_sample_import(db_session, "SCAN-20260818-032A", rev=1, baseline_action="UPDATE_EXISTING_BASELINE")
+    payload_a["coverage_events"] = [{
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "surface": "Pricing",
+        "region": "GLOBAL",
+        "coverage_state": "REVIEW_NOT_DUE",
+        "basis_coverage_id": "COV-000032",
+        "scan_observed_at": "2026-08-18T18:00:00+08:00",
+        "actual_checked_at": "2026-08-10T10:00:00+08:00"
+    }]
+    preview_a = ImportService.parse_and_preview(db_session, dumps_json(payload_a))
+    assert preview_a["is_valid"] is False
+    assert any("缺少明确的 next_review_at" in e for e in preview_a["errors"])
+
+    # Case B: next_review_at = "UNKNOWN" in basis
+    basis_cov.next_review_at = "UNKNOWN"
+    db_session.commit()
+
+    payload_b = make_sample_import(db_session, "SCAN-20260818-032B", rev=1, baseline_action="UPDATE_EXISTING_BASELINE")
+    payload_b["coverage_events"] = [{
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "surface": "Pricing",
+        "region": "GLOBAL",
+        "coverage_state": "REVIEW_NOT_DUE",
+        "basis_coverage_id": "COV-000032",
+        "scan_observed_at": "2026-08-18T18:00:00+08:00",
+        "actual_checked_at": "2026-08-10T10:00:00+08:00"
+    }]
+    preview_b = ImportService.parse_and_preview(db_session, dumps_json(payload_b))
+    assert preview_b["is_valid"] is False
+    assert any("缺少明确的 next_review_at" in e for e in preview_b["errors"])
+
+    # Case C: next_review_at = future concrete date -> PASS
+    basis_cov.next_review_at = "2099-01-01"
+    db_session.commit()
+
+    payload_c = make_sample_import(db_session, "SCAN-20260818-032C", rev=1, baseline_action="UPDATE_EXISTING_BASELINE")
+    payload_c["coverage_events"] = [{
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "surface": "Pricing",
+        "region": "GLOBAL",
+        "coverage_state": "REVIEW_NOT_DUE",
+        "basis_coverage_id": "COV-000032",
+        "scan_observed_at": "2026-08-18T18:00:00+08:00",
+        "actual_checked_at": "2026-08-10T10:00:00+08:00"
+    }]
+    preview_c = ImportService.parse_and_preview(db_session, dumps_json(payload_c))
+    assert preview_c["is_valid"] is True
+    commit_c = ImportService.commit_import(db_session, preview_c["import_pkg"], dumps_json(payload_c))
+    assert commit_c["success"] is True
+
+    # Case D: next_review_at = past date -> FAIL
+    basis_cov.next_review_at = "2020-01-01"
+    db_session.commit()
+
+    payload_d = make_sample_import(db_session, "SCAN-20260818-032D", rev=2, baseline_action="UPDATE_EXISTING_BASELINE")
+    payload_d["coverage_events"] = [{
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "surface": "Pricing",
+        "region": "GLOBAL",
+        "coverage_state": "REVIEW_NOT_DUE",
+        "basis_coverage_id": "COV-000032",
+        "scan_observed_at": "2026-08-18T18:00:00+08:00",
+        "actual_checked_at": "2026-08-10T10:00:00+08:00"
+    }]
+    preview_d = ImportService.parse_and_preview(db_session, dumps_json(payload_d))
+    assert preview_d["is_valid"] is False
+    assert any("已达到或超过下次复查时间" in e for e in preview_d["errors"])
+
+# TEST-033: NOT_CHECKED and BLIND_SPOT commit persists null actual_checked_at
+def test_033_not_checked_commit_persists_null_actual_checked_at(db_session):
+    payload = make_sample_import(db_session, "SCAN-20260818-033", rev=0)
+    payload["scan_result"]["scan_statuses"] = ["SCAN_INCOMPLETE", "OVERALL_PARTIAL"]
+    payload["coverage_events"] = [
+        {
+            "vendor": "OpenAI",
+            "product": "ChatGPT",
+            "surface": "Pricing",
+            "region": "GLOBAL",
+            "coverage_state": "NOT_CHECKED",
+            "scan_observed_at": "2026-08-18T18:00:00+08:00",
+            "actual_checked_at": None
+        },
+        {
+            "vendor": "OpenAI",
+            "product": "ChatGPT",
+            "surface": "Hidden Features",
+            "region": "GLOBAL",
+            "coverage_state": "BLIND_SPOT",
+            "scan_observed_at": "2026-08-18T18:00:00+08:00",
+            "actual_checked_at": None
+        }
+    ]
+    raw_json = dumps_json(payload)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    assert preview["is_valid"] is True
+    commit_res = ImportService.commit_import(db_session, preview["import_pkg"], raw_json)
+    assert commit_res["success"] is True
+
+    # Verify DB rows
+    not_checked_cov = db_session.query(CoverageHistoryModel).filter_by(surface="Pricing").first()
+    assert not_checked_cov is not None
+    assert not_checked_cov.actual_checked_at is None
+    assert not_checked_cov.scan_observed_at == "2026-08-18T18:00:00+08:00"
+
+    blind_spot_cov = db_session.query(CoverageHistoryModel).filter_by(surface="Hidden Features").first()
+    assert blind_spot_cov is not None
+    assert blind_spot_cov.actual_checked_at is None
+
+    # Verify CHECKED_NONE with actual_checked_at=None fails
+    payload_invalid = make_sample_import(db_session, "SCAN-20260818-033-INV", rev=1, baseline_action="UPDATE_EXISTING_BASELINE")
+    payload_invalid["coverage_events"] = [{
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "surface": "Pricing",
+        "region": "GLOBAL",
+        "coverage_state": "CHECKED_NONE",
+        "scan_observed_at": "2026-08-18T18:00:00+08:00",
+        "actual_checked_at": None
+    }]
+    preview_inv = ImportService.parse_and_preview(db_session, dumps_json(payload_invalid))
+    assert preview_inv["is_valid"] is False
+    assert any("必须提供实际检查时间戳" in e for e in preview_inv["errors"])
+
+# TEST-034: Source ADD remains exportable with timezone-aware fallback timestamp
+def test_034_source_add_remains_exportable(db_session):
+    payload = make_sample_import(db_session, "SCAN-20260818-034", rev=0)
+    payload["source_updates"] = [
+        {
+            "operation": "ADD",
+            "local_ref": "SNEW-001",
+            "record": {
+                "source_id": None,
+                "vendor": "OpenAI",
+                "product": "ChatGPT",
+                "surface": "Docs",
+                "source_name": "OpenAI Developer Platform",
+                "url": "https://platform.openai.com/docs",
+                "source_type": "OFFICIAL_DOCS",
+                "source_level": "S",
+                "status": "ACTIVE",
+                "last_verified_at": None  # Trigger fallback
+            }
+        }
+    ]
+    raw_json = dumps_json(payload)
+    preview = ImportService.parse_and_preview(db_session, raw_json)
+    assert preview["is_valid"] is True
+    commit_res = ImportService.commit_import(db_session, preview["import_pkg"], raw_json)
+    assert commit_res["success"] is True
+
+    # Verify DB CanonicalSourceModel timestamp is timezone-aware
+    src = db_session.query(CanonicalSourceModel).filter_by(source_name="OpenAI Developer Platform").first()
+    assert src is not None
+    assert src.last_verified_at is not None
+    assert is_valid_timezone_iso8601(src.last_verified_at)
+    assert src.last_verified_at != today_str()
+
+    # Re-export Scan Context and verify Pydantic serialization
+    context_pkg = ExportService.generate_scan_context(db_session, requested_mode="FULL_SCAN")
+    assert len(context_pkg.canonical_sources) >= 1
+    exported_src = next(s for s in context_pkg.canonical_sources if s.source_name == "OpenAI Developer Platform")
+    assert exported_src.last_verified_at == src.last_verified_at
+    assert is_valid_timezone_iso8601(exported_src.last_verified_at)
+
+# TEST-035: Manual Check cannot supply permanent ID
+def test_035_manual_check_cannot_supply_permanent_id(db_session):
+    # Case A: manual_check_id set, local_ref null -> FAIL
+    payload_a = make_sample_import(db_session, "SCAN-20260818-035A", rev=0)
+    payload_a["manual_check_items"] = [{
+        "manual_check_id": "MCHK-999999",
+        "local_ref": None,
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "channel": "IDE",
+        "reason": "Test check",
+        "priority": "LOW",
+        "suggested_action": "Check IDE",
+        "status": "OPEN"
+    }]
+    preview_a = ImportService.parse_and_preview(db_session, dumps_json(payload_a))
+    assert preview_a["is_valid"] is False
+    assert any("新人工检查项必须使用 local_ref" in e for e in preview_a["errors"])
+
+    # Case B: manual_check_id set, local_ref set -> FAIL
+    payload_b = make_sample_import(db_session, "SCAN-20260818-035B", rev=0)
+    payload_b["manual_check_items"] = [{
+        "manual_check_id": "MCHK-999999",
+        "local_ref": "MNEW-001",
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "channel": "IDE",
+        "reason": "Test check",
+        "priority": "LOW",
+        "suggested_action": "Check IDE",
+        "status": "OPEN"
+    }]
+    preview_b = ImportService.parse_and_preview(db_session, dumps_json(payload_b))
+    assert preview_b["is_valid"] is False
+    assert any("新人工检查项必须使用 local_ref" in e for e in preview_b["errors"])
+
+    # Case C: manual_check_id null, local_ref set -> PASS and commits permanent ID
+    payload_c = make_sample_import(db_session, "SCAN-20260818-035C", rev=0)
+    payload_c["manual_check_items"] = [{
+        "manual_check_id": None,
+        "local_ref": "MNEW-001",
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "channel": "IDE",
+        "reason": "Test check",
+        "priority": "LOW",
+        "suggested_action": "Check IDE",
+        "status": "OPEN"
+    }]
+    raw_c = dumps_json(payload_c)
+    preview_c = ImportService.parse_and_preview(db_session, raw_c)
+    assert preview_c["is_valid"] is True
+    commit_c = ImportService.commit_import(db_session, preview_c["import_pkg"], raw_c)
+    assert commit_c["success"] is True
+
+    m_rec = db_session.query(ManualCheckModel).filter_by(vendor="OpenAI").first()
+    assert m_rec is not None
+    assert m_rec.manual_check_id.startswith("MCHK-")
+    assert m_rec.manual_check_id != "MCHK-999999"
+

@@ -98,7 +98,7 @@ AI_Benefit_Randar/
 
 ---
 
-## 🧪 自动化测试验证 (TEST-001 ~ TEST-031)
+## 🧪 自动化测试验证 (TEST-001 ~ TEST-035 Protocol Regression Tests)
 
 - `TEST-001`: 首次 EMPTY Context 可以正常导出
 - `TEST-002`: CREATE Benefit 入库后生成永久 benefit_id
@@ -131,3 +131,8 @@ AI_Benefit_Randar/
 - `TEST-029`: BenefitRecord 包含多余字段 (extra=forbid) 阻断
 - `TEST-030`: scan_id 与 baseline_revision_at_export 强绑定校验
 - `TEST-031`: 初始基线全生命周期测试 (EMPTY -> Export -> Import -> READY -> rev+1 -> 幂等阻断)
+- `TEST-032`: REVIEW_NOT_DUE 必须依赖明确 next_review_at (null / UNKNOWN 阻断，严格未来日期通过且不刷新 actual_checked_at)
+- `TEST-033`: NOT_CHECKED 与 BLIND_SPOT 正确持久化 NULL actual_checked_at 且 CHECKED_NONE 缺 actual_checked_at 阻断
+- `TEST-034`: Source ADD 缺失 last_verified_at 时自动填充 timezone-aware ISO8601 且二次导出校验通过
+- `TEST-035`: 新建 Manual Check 必须使用 local_ref，严禁外部自定义永久 manual_check_id
+

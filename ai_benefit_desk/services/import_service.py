@@ -12,7 +12,8 @@ from ai_benefit_desk.services.validation_service import ValidationService, Valid
 from ai_benefit_desk.services.dedup_service import DedupService
 from ai_benefit_desk.services.id_service import IdService
 from ai_benefit_desk.utils.json_utils import loads_json, dumps_json
-from ai_benefit_desk.utils.date_utils import today_str
+from ai_benefit_desk.utils.date_utils import today_str, now_timezone_iso
+
 
 class ImportService:
     @staticmethod
@@ -346,6 +347,8 @@ class ImportService:
                         basis = db.query(CoverageHistoryModel).filter_by(coverage_id=cov.basis_coverage_id).first()
                         if basis:
                             actual_chk_time = basis.actual_checked_at
+                elif cov.coverage_state in ("NOT_CHECKED", "BLIND_SPOT", "NOT_APPLICABLE"):
+                    actual_chk_time = cov.actual_checked_at if (cov.actual_checked_at and cov.actual_checked_at != "UNKNOWN") else None
 
                 cov_model = CoverageHistoryModel(
                     coverage_id=cov_id,
@@ -380,7 +383,7 @@ class ImportService:
                         source_type=srec.source_type,
                         source_level=srec.source_level,
                         status="ACTIVE",
-                        last_verified_at=srec.last_verified_at or today_str()
+                        last_verified_at=srec.last_verified_at or now_timezone_iso()
                     )
                     db.add(src_model)
                 elif sop.operation == "UPDATE":
@@ -399,7 +402,7 @@ class ImportService:
 
             # 8. Process Manual Checks
             for mop in import_pkg.manual_check_items:
-                m_id = local_ref_to_id.get(mop.local_ref) or (mop.manual_check_id if mop.manual_check_id else IdService.generate_manual_check_id(db))
+                m_id = local_ref_to_id[mop.local_ref]
                 rel_b_id = mop.related_benefit_id
                 if not rel_b_id and mop.local_ref and mop.local_ref in local_ref_to_id:
                     pass
@@ -420,6 +423,7 @@ class ImportService:
                         result_notes=mop.result_notes or ""
                     )
                     db.add(m_model)
+
 
             # 9. Record Import Audit
             rev_after = rev_before + 1

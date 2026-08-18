@@ -201,12 +201,13 @@ class ExportService:
             for s in sources_query.all()
         ]
 
-        # 8. User Benefit States (Read-only, vendor-filtered)
+        # 8. User Benefit States (Read-only, vendor-filtered to final benefit_index UNION review_items)
         if vendor_filter:
-            relevant_b_ids = {b.benefit_id for b in all_benefits}
+            relevant_b_ids = {b.benefit_id for b in benefit_index} | {b.benefit_id for b in review_items}
             user_state_models = db.query(UserBenefitStateModel).filter(UserBenefitStateModel.benefit_id.in_(relevant_b_ids)).all() if relevant_b_ids else []
         else:
             user_state_models = db.query(UserBenefitStateModel).all()
+
 
         user_states = [
             UserBenefitStateItem(

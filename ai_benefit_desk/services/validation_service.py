@@ -97,7 +97,14 @@ class ValidationService:
                 if not s_exist:
                     result.add_error(f"Coverage 引用的 source_id 不存在: {cov.source_id}")
 
-            if cov.coverage_state == "REVIEW_NOT_DUE":
+            # State-dependent actual_checked_at validation
+            if cov.coverage_state in ("CHECKED_FOUND", "CHECKED_NONE"):
+                if not cov.actual_checked_at or cov.actual_checked_at == "UNKNOWN":
+                    msg = f"覆盖状态为 {cov.coverage_state} 时必须提供实际检查时间戳 (actual_checked_at)。(Vendor: {cov.vendor}, Product: {cov.product}, Surface: {cov.surface})"
+                    result.add_error(msg)
+                    result.coverage_gate_failures.append({"vendor": cov.vendor, "product": cov.product, "surface": cov.surface, "reason": msg})
+
+            elif cov.coverage_state == "REVIEW_NOT_DUE":
                 # Condition 1 & 2: Prohibit in DEEP_FULL_SCAN or non-FULL_SCAN
                 if is_deep_scan or import_pkg.scan_result.scan_mode != "FULL_SCAN":
                     msg = f"深度全量扫描 (DEEP_FULL_SCAN) 或非普通全量扫描中禁止使用 REVIEW_NOT_DUE。(Vendor: {cov.vendor}, Product: {cov.product}, Surface: {cov.surface})"
@@ -141,13 +148,28 @@ class ValidationService:
                     result.coverage_gate_failures.append({"vendor": cov.vendor, "product": cov.product, "surface": cov.surface, "reason": msg})
                     continue
 
-                # Condition 7: Current date must not have reached or passed next_review_at
-                if basis_cov.next_review_at and basis_cov.next_review_at != "UNKNOWN":
-                    if is_review_due(basis_cov.next_review_at, ref_date=today):
-                        msg = f"已达到或超过下次复查时间 ({basis_cov.next_review_at})，禁止继续使用 REVIEW_NOT_DUE"
-                        result.add_error(msg)
-                        result.coverage_gate_failures.append({"vendor": cov.vendor, "product": cov.product, "surface": cov.surface, "reason": msg})
-                        continue
+                # Condition 6.5: basis Coverage must have valid actual_checked_at
+                if not basis_cov.actual_checked_at or basis_cov.actual_checked_at == "UNKNOWN":
+                    msg = f"basis_coverage ({basis_cov.coverage_id}) 缺少有效的 actual_checked_at 时间戳"
+                    result.add_error(msg)
+                    result.coverage_gate_failures.append({"vendor": cov.vendor, "product": cov.product, "surface": cov.surface, "reason": msg})
+                    continue
+
+                # Condition 7: basis Coverage must have concrete next_review_at and must not be UNKNOWN / null
+                if not basis_cov.next_review_at or basis_cov.next_review_at == "UNKNOWN":
+                    msg = f"REVIEW_NOT_DUE 缺少明确的 next_review_at，无法证明复查尚未到期。(Vendor: {cov.vendor}, Product: {cov.product}, Surface: {cov.surface})"
+                    result.add_error(msg)
+                    result.coverage_gate_failures.append({"vendor": cov.vendor, "product": cov.product, "surface": cov.surface, "reason": msg})
+                    continue
+
+                # Condition 7.5: Current date must be strictly before next_review_at
+                if is_review_due(basis_cov.next_review_at, ref_date=today):
+                    msg = f"已达到或超过下次复查时间 ({basis_cov.next_review_at})，禁止继续使用 REVIEW_NOT_DUE。(Vendor: {cov.vendor}, Product: {cov.product}, Surface: {cov.surface})"
+                    result.add_error(msg)
+                    result.coverage_gate_failures.append({"vendor": cov.vendor, "product": cov.product, "surface": cov.surface, "reason": msg})
+                    continue
+
+
 
         # 6. Global Local Ref Uniqueness & Benefit Operations Validation
         global_local_refs = set()
@@ -308,7 +330,11 @@ class ValidationService:
 
         # 9. Manual Check Items Validation
         for mop in import_pkg.manual_check_items:
-            if mop.local_ref:
+            if mop.manual_check_id is not None:
+                result.add_error("新人工检查项必须使用 local_ref，manual_check_id 由 Benefit Desk 分配。")
+            if not mop.local_ref:
+                result.add_error("新人工检查项必须提供 local_ref。")
+            else:
                 if mop.local_ref in global_local_refs:
                     result.add_error(f"同一个 Import 内 local_ref 必须全局唯一: 重复的 local_ref {mop.local_ref}")
                 else:
@@ -323,5 +349,6 @@ class ValidationService:
                 l_exist = db.query(LeadModel).filter_by(lead_id=mop.related_lead_id).first()
                 if not l_exist:
                     result.add_error(f"Manual Check 引用的 related_lead_id 不存在: {mop.related_lead_id}")
+
 
         return result
