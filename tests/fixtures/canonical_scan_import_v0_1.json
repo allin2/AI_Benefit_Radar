@@ -1,0 +1,103 @@
+{
+  "protocol_version": "0.1",
+  "benefit_schema_version": "1.2.1",
+  "package_type": "SCAN_IMPORT",
+  "scan_result": {
+    "scan_id": "SCAN-20260818-001",
+    "scan_mode": "FULL_SCAN",
+    "context_baseline_revision": 0,
+    "generated_at": "2026-08-18T18:25:00+08:00",
+    "scan_statuses": [
+      "PUBLIC_COMPLETE",
+      "OVERALL_PARTIAL"
+    ],
+    "baseline_action": "BUILD_INITIAL_BASELINE",
+    "summary_notes": "首次全量扫描完成"
+  },
+  "benefit_changes": [
+    {
+      "operation": "CREATE",
+      "local_ref": "BNEW-001",
+      "record": {
+        "benefit_id": null,
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "campaign_name": "ChatGPT Free Tier",
+        "benefit_type": "FREE_ACCESS",
+        "benefit_detail": "所有注册用户享有基础免费访问",
+        "linked_vendor": "UNKNOWN",
+        "linked_product": "UNKNOWN",
+        "linked_benefit_detail": "UNKNOWN",
+        "wallet": "UNKNOWN",
+        "amount": "UNKNOWN",
+        "unit": "UNKNOWN",
+        "reset_policy": "NONE",
+        "grant_method": "SIGNUP",
+        "regions": ["GLOBAL"],
+        "eligibility": "所有注册用户",
+        "eligibility_class": ["ALL_USERS"],
+        "start_date": "UNKNOWN",
+        "end_date": "UNKNOWN",
+        "first_seen": "2026-08-18",
+        "last_checked": "2026-08-18",
+        "next_review_date": "2026-09-18",
+        "claim_method": "注册登录自动生效",
+        "credit_card_required": "NO",
+        "verification_required": "NO",
+        "official_source": "https://openai.com/chatgpt",
+        "source_level": "S",
+        "verification_status": "CONFIRMED",
+        "status": "ACTIVE",
+        "change_type": "UNKNOWN",
+        "account_risk": "NONE",
+        "region_risk": "NONE",
+        "compliance_risk": "NONE",
+        "notes": ""
+      },
+      "evidence": [
+        {
+          "url": "https://openai.com/chatgpt/pricing",
+          "source_level": "S",
+          "source_role": "PRIMARY",
+          "checked_at": "2026-08-18T17:20:00+08:00",
+          "supports_fields": ["status", "eligibility", "benefit_detail"]
+        }
+      ]
+    }
+  ],
+  "lead_changes": [],
+  "coverage_events": [
+    {
+      "vendor": "OpenAI",
+      "product": "ChatGPT",
+      "surface": "Free / Signup",
+      "region": "GLOBAL",
+      "coverage_state": "CHECKED_FOUND",
+      "scan_observed_at": "2026-08-18",
+      "actual_checked_at": "2026-08-18",
+      "next_review_at": "2026-09-18",
+      "source_id": null,
+      "basis_coverage_id": null,
+      "notes": ""
+    }
+  ],
+  "source_updates": [
+    {
+      "operation": "ADD",
+      "local_ref": "SNEW-001",
+      "record": {
+        "vendor": "OpenAI",
+        "product": "ChatGPT",
+        "surface": "Free / Signup",
+        "source_name": "ChatGPT Pricing",
+        "url": "https://openai.com/chatgpt/pricing",
+        "source_type": "PRICING",
+        "source_level": "S",
+        "status": "ACTIVE",
+        "last_verified_at": "2026-08-18"
+      }
+    }
+  ],
+  "manual_check_items": [],
+  "warnings": []
+}

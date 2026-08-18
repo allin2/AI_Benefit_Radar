@@ -7,7 +7,7 @@ from ai_benefit_desk.db.models import (
     BenefitModel, LeadModel, CoverageHistoryModel, CanonicalSourceModel,
     UserBenefitStateModel, ManualCheckModel, ScanModel, ImportAuditModel, SystemStateModel
 )
-from ai_benefit_desk.schemas.protocol_models import ScanImportPackage
+from ai_benefit_desk.schemas.protocol_models import ScanImportPackage, WarningItem
 from ai_benefit_desk.services.validation_service import ValidationService, ValidationResult
 from ai_benefit_desk.services.dedup_service import DedupService
 from ai_benefit_desk.services.id_service import IdService
@@ -16,7 +16,11 @@ from ai_benefit_desk.utils.date_utils import today_str
 
 class ImportService:
     @staticmethod
-    def parse_and_preview(db: Session, raw_json_str: str) -> Dict[str, Any]:
+    def parse_and_preview(
+        db: Session,
+        raw_json_str: str,
+        user_override_evidence: bool = False
+    ) -> Dict[str, Any]:
         """Parse JSON, run all validation gates, detect duplicates, and generate preview."""
         try:
             data = loads_json(raw_json_str)
@@ -34,14 +38,16 @@ class ImportService:
         except Exception as e:
             return {
                 "is_valid": False,
-                "errors": [f"数据结构不符合 Protocol / Schema 规范: {str(e)}"],
+                "errors": [f"数据结构不符合 Protocol / Schema 规范 (字段或枚举错误): {str(e)}"],
                 "warnings": [],
                 "preview": None,
                 "import_pkg": None
             }
 
         # Run Validation Service
-        val_result: ValidationResult = ValidationService.validate_import_package(db, import_pkg)
+        val_result: ValidationResult = ValidationService.validate_import_package(
+            db, import_pkg, user_override_evidence=user_override_evidence
+        )
 
         # Run Dedup Service
         duplicates = DedupService.detect_candidate_duplicates(db, import_pkg.benefit_changes)
@@ -60,6 +66,7 @@ class ImportService:
         cov_rechecks = [c for c in import_pkg.coverage_events if c.coverage_state in ("CHECKED_FOUND", "CHECKED_NONE")]
         cov_review_not_due = [c for c in import_pkg.coverage_events if c.coverage_state == "REVIEW_NOT_DUE"]
         cov_blind_spots = [c for c in import_pkg.coverage_events if c.coverage_state == "BLIND_SPOT"]
+        cov_not_checked = [c for c in import_pkg.coverage_events if c.coverage_state == "NOT_CHECKED"]
 
         src_adds = [s for s in import_pkg.source_updates if s.operation == "ADD"]
         src_updates = [s for s in import_pkg.source_updates if s.operation == "UPDATE"]
@@ -67,10 +74,9 @@ class ImportService:
 
         preview_summary = {
             "scan_id": import_pkg.scan_result.scan_id,
-            "requested_mode": import_pkg.scan_result.requested_mode,
-            "actual_scan_mode": import_pkg.scan_result.actual_scan_mode,
-            "public_scan_status": import_pkg.scan_result.public_scan_status,
-            "overall_coverage_status": import_pkg.scan_result.overall_coverage_status,
+            "scan_mode": import_pkg.scan_result.scan_mode,
+            "generated_at": import_pkg.scan_result.generated_at,
+            "scan_statuses": import_pkg.scan_result.scan_statuses,
             "context_baseline_revision": import_pkg.scan_result.context_baseline_revision,
             "baseline_action": import_pkg.scan_result.baseline_action,
             "summary_notes": import_pkg.scan_result.summary_notes,
@@ -89,6 +95,7 @@ class ImportService:
             "coverage_recheck_count": len(cov_rechecks),
             "coverage_review_not_due_count": len(cov_review_not_due),
             "coverage_blind_spot_count": len(cov_blind_spots),
+            "coverage_not_checked_count": len(cov_not_checked),
             
             "source_add_count": len(src_adds),
             "source_update_count": len(src_updates),
@@ -96,7 +103,7 @@ class ImportService:
             
             "manual_check_count": len(import_pkg.manual_check_items),
             
-            # Details for UI
+            # Detailed Objects
             "benefit_changes": import_pkg.benefit_changes,
             "lead_changes": import_pkg.lead_changes,
             "coverage_events": import_pkg.coverage_events,
@@ -107,8 +114,12 @@ class ImportService:
             "coverage_errors": val_result.coverage_gate_failures,
         }
 
-        # Merge package-level warnings and validation warnings
-        all_warnings = list(import_pkg.warnings) + val_result.warnings
+        # Combine package-level structured warnings and validation warnings
+        package_warnings = [
+            {"type": w.type, "message_zh": w.message_zh, "related_ref": w.related_ref}
+            for w in import_pkg.warnings
+        ]
+        all_warnings = package_warnings + val_result.warnings
 
         return {
             "is_valid": val_result.is_valid,
@@ -132,6 +143,13 @@ class ImportService:
         now = datetime.utcnow()
 
         try:
+            # Re-validate to get full warnings and validation outcome
+            val_res = ValidationService.validate_import_package(
+                db, import_pkg, user_override_evidence=user_override_evidence
+            )
+            if not val_res.is_valid:
+                raise ValueError(f"导入校验失败: {'; '.join(val_res.errors)}")
+
             # 1. Check system state & current revision
             sys_state = db.query(SystemStateModel).filter_by(id=1).with_for_update().first()
             if not sys_state:
@@ -155,7 +173,6 @@ class ImportService:
                     if res == "IGNORE":
                         continue
                     elif res and res.startswith("UPDATE:"):
-                        # Target existing benefit ID specified
                         local_ref_to_id[bop.local_ref] = res.split(":", 1)[1]
                     else:
                         local_ref_to_id[bop.local_ref] = IdService.generate_benefit_id(db)
@@ -174,17 +191,18 @@ class ImportService:
 
             # 4. Process Benefit Changes
             is_initial_baseline = (import_pkg.scan_result.baseline_action == "BUILD_INITIAL_BASELINE")
+
             for bop in import_pkg.benefit_changes:
                 res = dedup_resolutions.get(bop.local_ref)
                 if res == "IGNORE":
                     continue
 
-                rec = bop.benefit_record
-                effective_change_type = rec.change_type
-                if is_initial_baseline and rec.change_type == "NEW":
-                    effective_change_type = "UNKNOWN"
-
                 if bop.operation == "CREATE" and not (res and res.startswith("UPDATE:")):
+                    rec = bop.record
+                    effective_change_type = rec.change_type
+                    if is_initial_baseline and rec.change_type == "NEW":
+                        effective_change_type = "UNKNOWN"
+
                     perm_id = local_ref_to_id[bop.local_ref]
                     b_model = BenefitModel(
                         benefit_id=perm_id,
@@ -224,58 +242,44 @@ class ImportService:
                     b_model.eligibility_class = rec.eligibility_class
                     db.add(b_model)
 
-                elif bop.operation in ("UPDATE", "CONFIRM_NO_CHANGE") or (res and res.startswith("UPDATE:")):
+                elif bop.operation == "UPDATE" or (res and res.startswith("UPDATE:")):
                     target_b_id = bop.benefit_id if bop.operation != "CREATE" else res.split(":", 1)[1]
                     existing_b = db.query(BenefitModel).filter_by(benefit_id=target_b_id).first()
                     if not existing_b:
                         raise ValueError(f"要更新的福利不存在: {target_b_id}")
+
+                    # Apply PATCH semantics
+                    patch_dict = bop.patch or {}
+                    for k, v in patch_dict.items():
+                        if k == "regions":
+                            existing_b.regions = v
+                        elif k == "eligibility_class":
+                            existing_b.eligibility_class = v
+                        elif hasattr(existing_b, k) and k not in ("id", "benefit_id", "created_at"):
+                            setattr(existing_b, k, v)
+
+                    if bop.change_type:
+                        existing_b.change_type = bop.change_type
+
+                    db.flush()
+
+                elif bop.operation == "CONFIRM_NO_CHANGE":
+                    existing_b = db.query(BenefitModel).filter_by(benefit_id=bop.benefit_id).first()
+                    if not existing_b:
+                        raise ValueError(f"要复核的福利不存在: {bop.benefit_id}")
                     
-                    if bop.operation == "CONFIRM_NO_CHANGE":
-                        existing_b.last_checked = rec.last_checked
-                        existing_b.change_type = "NO_CHANGE"
-                        if rec.next_review_date and rec.next_review_date != "UNKNOWN":
-                            existing_b.next_review_date = rec.next_review_date
-                    else:
-                        existing_b.vendor = rec.vendor
-                        existing_b.product = rec.product
-                        existing_b.linked_vendor = rec.linked_vendor or "UNKNOWN"
-                        existing_b.linked_product = rec.linked_product or "UNKNOWN"
-                        existing_b.campaign_name = rec.campaign_name
-                        existing_b.benefit_type = rec.benefit_type
-                        existing_b.benefit_detail = rec.benefit_detail
-                        existing_b.linked_benefit_detail = rec.linked_benefit_detail or "UNKNOWN"
-                        existing_b.wallet = rec.wallet or "UNKNOWN"
-                        existing_b.amount = rec.amount or "UNKNOWN"
-                        existing_b.unit = rec.unit or "UNKNOWN"
-                        existing_b.reset_policy = rec.reset_policy or "UNKNOWN"
-                        existing_b.grant_method = rec.grant_method or "UNKNOWN"
-                        existing_b.regions = rec.regions
-                        existing_b.eligibility = rec.eligibility or "UNKNOWN"
-                        existing_b.eligibility_class = rec.eligibility_class
-                        existing_b.start_date = rec.start_date or "UNKNOWN"
-                        existing_b.end_date = rec.end_date or "UNKNOWN"
-                        existing_b.last_checked = rec.last_checked
-                        existing_b.next_review_date = rec.next_review_date or "UNKNOWN"
-                        existing_b.claim_method = rec.claim_method or "UNKNOWN"
-                        existing_b.credit_card_required = rec.credit_card_required or "UNKNOWN"
-                        existing_b.verification_required = rec.verification_required or "UNKNOWN"
-                        existing_b.official_source = rec.official_source
-                        existing_b.source_level = rec.source_level
-                        existing_b.verification_status = rec.verification_status
-                        existing_b.status = rec.status
-                        existing_b.change_type = effective_change_type
-                        existing_b.account_risk = rec.account_risk or "NONE"
-                        existing_b.region_risk = rec.region_risk or "UNKNOWN"
-                        existing_b.compliance_risk = rec.compliance_risk or "NONE"
-                        if rec.notes:
-                            existing_b.notes = rec.notes
+                    if bop.last_checked:
+                        existing_b.last_checked = bop.last_checked
+                    if bop.next_review_date and bop.next_review_date != "UNKNOWN":
+                        existing_b.next_review_date = bop.next_review_date
+                    existing_b.change_type = "NO_CHANGE"
                     db.flush()
 
             # 5. Process Lead Changes
             for lop in import_pkg.lead_changes:
                 if lop.operation == "CREATE":
                     perm_lead_id = local_ref_to_id[lop.local_ref]
-                    lrec = lop.lead_record
+                    lrec = lop.record
                     l_model = LeadModel(
                         lead_id=perm_lead_id,
                         vendor=lrec.vendor,
@@ -291,30 +295,33 @@ class ImportService:
                     )
                     l_model.regions = lrec.regions
                     db.add(l_model)
+
                 elif lop.operation == "UPDATE":
                     existing_lead = db.query(LeadModel).filter_by(lead_id=lop.lead_id).first()
-                    if existing_lead and lop.lead_record:
-                        lrec = lop.lead_record
-                        existing_lead.vendor = lrec.vendor
-                        existing_lead.product = lrec.product
-                        existing_lead.lead_summary = lrec.lead_summary
-                        existing_lead.verification_status = lrec.verification_status
-                        existing_lead.source_level = lrec.source_level
-                        existing_lead.regions = lrec.regions
-                        existing_lead.missing_evidence = lrec.missing_evidence or ""
-                        existing_lead.last_checked = lrec.last_checked
-                        existing_lead.next_review_date = lrec.next_review_date or "UNKNOWN"
+                    if not existing_lead:
+                        raise ValueError(f"要更新的线索不存在: {lop.lead_id}")
+                    
+                    patch_dict = lop.patch or {}
+                    for k, v in patch_dict.items():
+                        if k == "regions":
+                            existing_lead.regions = v
+                        elif hasattr(existing_lead, k) and k not in ("id", "lead_id", "created_at"):
+                            setattr(existing_lead, k, v)
+
                 elif lop.operation == "RESOLVE_TO_BENEFIT":
                     existing_lead = db.query(LeadModel).filter_by(lead_id=lop.lead_id).first()
                     if not existing_lead:
                         raise ValueError(f"要转福利的线索不存在: {lop.lead_id}")
+                    
                     target_id = lop.target_benefit_id
-                    if not target_id and lop.target_benefit_local_ref:
-                        target_id = local_ref_to_id.get(lop.target_benefit_local_ref)
+                    if not target_id and lop.target_benefit_ref:
+                        target_id = local_ref_to_id.get(lop.target_benefit_ref)
                     if not target_id:
                         raise ValueError(f"线索 {lop.lead_id} 转福利目标 ID 无法解析")
+                    
                     existing_lead.status = "RESOLVED"
                     existing_lead.resolved_benefit_id = target_id
+
                 elif lop.operation == "REJECT":
                     existing_lead = db.query(LeadModel).filter_by(lead_id=lop.lead_id).first()
                     if not existing_lead:
@@ -326,14 +333,13 @@ class ImportService:
             for cov in import_pkg.coverage_events:
                 cov_id = IdService.generate_coverage_id(db)
                 actual_chk_time = cov.actual_checked_at
-                
+
                 # Rule: REVIEW_NOT_DUE must NOT refresh actual_checked_at to scan date
                 if cov.coverage_state == "REVIEW_NOT_DUE":
                     if cov.basis_coverage_id:
                         basis = db.query(CoverageHistoryModel).filter_by(coverage_id=cov.basis_coverage_id).first()
                         if basis:
                             actual_chk_time = basis.actual_checked_at
-                    # otherwise retain cov.actual_checked_at as specified in payload
 
                 cov_model = CoverageHistoryModel(
                     coverage_id=cov_id,
@@ -355,8 +361,8 @@ class ImportService:
 
             # 7. Process Source Updates
             for sop in import_pkg.source_updates:
-                srec = sop.source_record
                 if sop.operation == "ADD":
+                    srec = sop.record
                     src_id = local_ref_to_id.get(sop.local_ref) or IdService.generate_source_id(db)
                     src_model = CanonicalSourceModel(
                         source_id=src_id,
@@ -373,15 +379,13 @@ class ImportService:
                     db.add(src_model)
                 elif sop.operation == "UPDATE":
                     existing_s = db.query(CanonicalSourceModel).filter_by(source_id=sop.source_id).first()
-                    if existing_s:
-                        existing_s.vendor = srec.vendor
-                        existing_s.product = srec.product
-                        existing_s.surface = srec.surface
-                        existing_s.source_name = srec.source_name
-                        existing_s.url = srec.url
-                        existing_s.source_type = srec.source_type
-                        existing_s.source_level = srec.source_level
-                        existing_s.last_verified_at = srec.last_verified_at or today_str()
+                    if not existing_s:
+                        raise ValueError(f"要更新的官方入口不存在: {sop.source_id}")
+                    
+                    patch_dict = sop.patch or {}
+                    for k, v in patch_dict.items():
+                        if hasattr(existing_s, k) and k not in ("id", "source_id", "created_at"):
+                            setattr(existing_s, k, v)
                 elif sop.operation == "DEPRECATE":
                     existing_s = db.query(CanonicalSourceModel).filter_by(source_id=sop.source_id).first()
                     if existing_s:
@@ -391,8 +395,8 @@ class ImportService:
             for mop in import_pkg.manual_check_items:
                 m_id = local_ref_to_id.get(mop.local_ref) or (mop.manual_check_id if mop.manual_check_id else IdService.generate_manual_check_id(db))
                 rel_b_id = mop.related_benefit_id
-                if not rel_b_id and mop.related_benefit_local_ref:
-                    rel_b_id = local_ref_to_id.get(mop.related_benefit_local_ref)
+                if not rel_b_id and mop.local_ref and mop.local_ref in local_ref_to_id:
+                    pass
 
                 existing_m = db.query(ManualCheckModel).filter_by(manual_check_id=m_id).first()
                 if not existing_m:
@@ -425,7 +429,11 @@ class ImportService:
                 user_confirmed=True,
                 status="SUCCESS"
             )
-            audit_record.warnings = import_pkg.warnings
+            pkg_warnings = [
+                {"type": w.type, "message_zh": w.message_zh, "related_ref": w.related_ref}
+                for w in import_pkg.warnings
+            ]
+            audit_record.warnings = pkg_warnings + val_res.warnings
             db.add(audit_record)
 
             # 10. Update Scan Record
@@ -433,17 +441,14 @@ class ImportService:
             if not scan_rec:
                 scan_rec = ScanModel(
                     scan_id=import_pkg.scan_result.scan_id,
-                    requested_mode=import_pkg.scan_result.requested_mode,
+                    requested_mode=import_pkg.scan_result.scan_mode,
                     created_at=now
                 )
                 db.add(scan_rec)
-            scan_rec.actual_scan_mode = import_pkg.scan_result.actual_scan_mode
+            scan_rec.actual_scan_mode = import_pkg.scan_result.scan_mode
             scan_rec.baseline_action = import_pkg.scan_result.baseline_action
             scan_rec.imported_at = now
-            scan_rec.scan_statuses = {
-                "public_scan_status": import_pkg.scan_result.public_scan_status,
-                "overall_coverage_status": import_pkg.scan_result.overall_coverage_status
-            }
+            scan_rec.scan_statuses = import_pkg.scan_result.scan_statuses
             scan_rec.import_status = "COMMITTED"
 
             # 11. Increment System Revision & Set State

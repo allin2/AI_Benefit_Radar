@@ -18,10 +18,13 @@ if uploaded_file is not None:
     # Store parsed preview in session_state
     db = SessionLocal()
     try:
-        preview_data = ImportService.parse_and_preview(db, raw_content)
+        # Check override evidence toggle in session_state
+        override_ev = st.checkbox("⚠️ 人工覆盖证据门禁 (仅在确认福利真实但暂时无法取得S/A证据时使用，将记录审计)", key="override_ev_toggle")
+
+        preview_data = ImportService.parse_and_preview(db, raw_content, user_override_evidence=override_ev)
         
         if not preview_data["is_valid"]:
-            st.error("❌ **校验失败，禁止导入！** 发现以下严重错误：")
+            st.error("❌ **校验失败，禁止导入！** 发现以下阻塞性错误：")
             for err in preview_data["errors"]:
                 st.error(f"- {err}")
         else:
@@ -35,12 +38,11 @@ if uploaded_file is not None:
             sc1, sc2, sc3, sc4 = st.columns(4)
             with sc1:
                 st.write(f"**扫描批次 ID:** `{p['scan_id']}`")
-                st.write(f"**扫描模式:** `{p['actual_scan_mode']}`")
+                st.write(f"**扫描模式:** `{p['scan_mode']}`")
             with sc2:
-                pub_label = get_label(SCAN_COMPLETION_LABELS, p['public_scan_status'])
-                st.write(f"**公开扫描完成度:** `{pub_label}`")
-                all_label = get_label(SCAN_COMPLETION_LABELS, p['overall_coverage_status'])
-                st.write(f"**总体覆盖状态:** `{all_label}`")
+                status_labels = [get_label(SCAN_COMPLETION_LABELS, s) for s in p['scan_statuses']]
+                st.write(f"**扫描完成状态:** `{', '.join(status_labels)}`")
+                st.write(f"**生成时间:** `{p['generated_at']}`")
             with sc3:
                 st.write(f"**基线版本 (Revision):** `{p['context_baseline_revision']}`")
                 st.write(f"**基线动作:** `{p['baseline_action']}`")
@@ -76,10 +78,15 @@ if uploaded_file is not None:
 
             with st.expander("查看福利变更明细", expanded=True):
                 for bop in p["benefit_changes"]:
-                    rec = bop.benefit_record
                     op_tag = f"【{bop.operation}】"
-                    st.markdown(f"**{op_tag}** [{bop.local_ref or bop.benefit_id}] 【{rec.vendor} - {rec.product}】 {rec.campaign_name}")
-                    st.caption(f"内容: {rec.benefit_detail} | 类型: {rec.benefit_type} | 状态: {rec.status} | 来源等级: {rec.source_level}")
+                    if bop.operation == "CREATE" and bop.record:
+                        rec = bop.record
+                        st.markdown(f"**{op_tag}** [{bop.local_ref}] 【{rec.vendor} - {rec.product}】 {rec.campaign_name}")
+                        st.caption(f"内容: {rec.benefit_detail} | 类型: {rec.benefit_type} | 状态: {rec.status} | 来源等级: {rec.source_level}")
+                    elif bop.operation == "UPDATE":
+                        st.markdown(f"**{op_tag}** [{bop.benefit_id}] 字段变更: `{json.dumps(bop.patch, ensure_ascii=False)}`")
+                    elif bop.operation == "CONFIRM_NO_CHANGE":
+                        st.markdown(f"**{op_tag}** [{bop.benefit_id}] 复核日期: `{bop.last_checked}` | 下次复查: `{bop.next_review_date}`")
 
             st.markdown("---")
 
@@ -88,7 +95,14 @@ if uploaded_file is not None:
             if p["lead_changes"]:
                 with st.expander("查看线索变更明细", expanded=False):
                     for lop in p["lead_changes"]:
-                        st.write(f"- **【{lop.operation}】** ID: `{lop.local_ref or lop.lead_id}` | 目标: `{lop.target_benefit_id or lop.target_benefit_local_ref or '-'}`")
+                        if lop.operation == "CREATE" and lop.record:
+                            st.write(f"- **【CREATE】** [{lop.local_ref}] {lop.record.lead_summary}")
+                        elif lop.operation == "RESOLVE_TO_BENEFIT":
+                            st.write(f"- **【RESOLVE_TO_BENEFIT】** [{lop.lead_id}] -> `{lop.target_benefit_ref or lop.target_benefit_id}`")
+                        elif lop.operation == "REJECT":
+                            st.write(f"- **【REJECT】** [{lop.lead_id}] 原因: {lop.rejection_reason}")
+                        else:
+                            st.write(f"- **【{lop.operation}】** [{lop.lead_id}]")
 
             st.markdown("---")
 
@@ -100,9 +114,12 @@ if uploaded_file is not None:
             # Warnings section
             if preview_data["warnings"]:
                 st.markdown("---")
-                st.markdown("### ⚠️ 【警告提示】")
+                st.markdown("### ⚠️ 【结构化警告提示】")
                 for w in preview_data["warnings"]:
-                    st.warning(f"- {w}")
+                    w_type = w.get("type", "OTHER")
+                    w_msg = w.get("message_zh", "")
+                    w_ref = f" (关联: {w.get('related_ref')})" if w.get('related_ref') else ""
+                    st.warning(f"**[{w_type}]** {w_msg}{w_ref}")
 
             st.markdown("---")
 
@@ -113,7 +130,8 @@ if uploaded_file is not None:
                     try:
                         commit_res = ImportService.commit_import(
                             db, pkg, raw_content,
-                            dedup_resolutions=dedup_resolutions
+                            dedup_resolutions=dedup_resolutions,
+                            user_override_evidence=override_ev
                         )
                         st.balloons()
                         st.success(f"🎉 **导入成功！** 扫描批次 `{commit_res['scan_id']}` 已完成入库，系统基线已由 Revision `{commit_res['baseline_revision_before']}` 升级为 `{commit_res['baseline_revision_after']}`！")

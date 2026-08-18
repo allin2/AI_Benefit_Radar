@@ -1,0 +1,22 @@
+{
+  "protocol_version": "0.1",
+  "benefit_schema_version": "1.2.1",
+  "package_type": "SCAN_CONTEXT",
+  "scan": {
+    "scan_id": "SCAN-20260818-001",
+    "generated_at": "2026-08-18T18:00:00+08:00",
+    "baseline_revision": 0,
+    "baseline_state": "EMPTY",
+    "regions": ["CN", "TW", "US", "GLOBAL"],
+    "requested_mode": "FULL_SCAN",
+    "protocol_version": "0.1",
+    "benefit_schema_version": "1.2.1"
+  },
+  "benefit_index": [],
+  "review_items": [],
+  "open_leads": [],
+  "latest_coverage": [],
+  "canonical_sources": [],
+  "user_benefit_states": [],
+  "manual_checks_open": []
+}

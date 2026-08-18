@@ -1,0 +1,40 @@
+{
+  "protocol_version": "0.1",
+  "benefit_schema_version": "1.2.1",
+  "package_type": "SCAN_IMPORT",
+  "scan_result": {
+    "scan_id": "SCAN-20260818-999",
+    "requested_mode": "FULL_SCAN",
+    "actual_scan_mode": "FULL_SCAN",
+    "scan_timestamp": "2026-08-18T18:25:00+08:00",
+    "context_baseline_revision": 0,
+    "public_scan_status": "PUBLIC_COMPLETE",
+    "overall_coverage_status": "OVERALL_PARTIAL",
+    "baseline_action": "INCREMENTAL_UPDATE"
+  },
+  "benefit_changes": [
+    {
+      "operation": "CREATE",
+      "local_ref": "BNEW-999",
+      "benefit_record": {
+        "benefit_id": null,
+        "vendor": "Test",
+        "product": "Test",
+        "campaign_name": "Test",
+        "benefit_type": "FREE_ACCESS",
+        "benefit_detail": "Test",
+        "first_seen": "2026-08-18",
+        "last_checked": "2026-08-18",
+        "official_source": "https://test.com",
+        "source_level": "S",
+        "verification_status": "CONFIRMED",
+        "status": "ACTIVE"
+      }
+    }
+  ],
+  "lead_changes": [],
+  "coverage_events": [],
+  "source_updates": [],
+  "manual_check_items": [],
+  "warnings": []
+}

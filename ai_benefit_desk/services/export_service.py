@@ -220,10 +220,11 @@ class ExportService:
         # Assemble Package
         scan_meta = ScanMetadata(
             scan_id=scan_id,
-            requested_mode=requested_mode,
             generated_at=now_iso,
             baseline_revision=baseline_revision,
             baseline_state=baseline_state,
+            regions=["CN", "TW", "US", "GLOBAL"],
+            requested_mode=requested_mode,
             protocol_version=PROTOCOL_VERSION,
             benefit_schema_version=BENEFIT_SCHEMA_VERSION
         )

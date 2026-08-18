@@ -1,0 +1,81 @@
+{
+  "protocol_version": "0.1",
+  "benefit_schema_version": "1.2.1",
+  "package_type": "SCAN_IMPORT",
+  "scan_result": {
+    "scan_id": "SCAN-20260818-004",
+    "scan_mode": "FULL_SCAN",
+    "context_baseline_revision": 3,
+    "generated_at": "2026-08-18T18:50:00+08:00",
+    "scan_statuses": [
+      "PUBLIC_COMPLETE",
+      "OVERALL_PARTIAL"
+    ],
+    "baseline_action": "UPDATE_EXISTING_BASELINE",
+    "summary_notes": "线索升级为新福利"
+  },
+  "benefit_changes": [
+    {
+      "operation": "CREATE",
+      "local_ref": "BNEW-002",
+      "record": {
+        "benefit_id": null,
+        "vendor": "Anthropic",
+        "product": "Claude Code",
+        "campaign_name": "Claude Code Early Access Grant",
+        "benefit_type": "CODING_CREDITS",
+        "benefit_detail": "新用户获赠 $20 使用额度",
+        "linked_vendor": "UNKNOWN",
+        "linked_product": "UNKNOWN",
+        "linked_benefit_detail": "UNKNOWN",
+        "wallet": "API Credits",
+        "amount": "20",
+        "unit": "USD",
+        "reset_policy": "NONE",
+        "grant_method": "SIGNUP",
+        "regions": ["GLOBAL"],
+        "eligibility": "新用户",
+        "eligibility_class": ["NEW_USERS"],
+        "start_date": "UNKNOWN",
+        "end_date": "UNKNOWN",
+        "first_seen": "2026-08-18",
+        "last_checked": "2026-08-18",
+        "next_review_date": "2026-09-18",
+        "claim_method": "注册登录领取",
+        "credit_card_required": "NO",
+        "verification_required": "NO",
+        "official_source": "https://anthropic.com/claude-code",
+        "source_level": "S",
+        "verification_status": "CONFIRMED",
+        "status": "ACTIVE",
+        "change_type": "NEW",
+        "account_risk": "NONE",
+        "region_risk": "NONE",
+        "compliance_risk": "NONE",
+        "notes": ""
+      },
+      "evidence": [
+        {
+          "url": "https://anthropic.com/claude-code",
+          "source_level": "S",
+          "source_role": "PRIMARY",
+          "checked_at": "2026-08-18T17:20:00+08:00",
+          "supports_fields": ["amount", "status"]
+        }
+      ]
+    }
+  ],
+  "lead_changes": [
+    {
+      "operation": "RESOLVE_TO_BENEFIT",
+      "lead_id": "LEAD-000001",
+      "target_benefit_ref": "BNEW-002",
+      "target_benefit_id": null,
+      "evidence": []
+    }
+  ],
+  "coverage_events": [],
+  "source_updates": [],
+  "manual_check_items": [],
+  "warnings": []
+}

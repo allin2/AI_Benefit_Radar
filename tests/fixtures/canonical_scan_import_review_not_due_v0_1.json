@@ -1,0 +1,38 @@
+{
+  "protocol_version": "0.1",
+  "benefit_schema_version": "1.2.1",
+  "package_type": "SCAN_IMPORT",
+  "scan_result": {
+    "scan_id": "SCAN-20260818-003",
+    "scan_mode": "FULL_SCAN",
+    "context_baseline_revision": 2,
+    "generated_at": "2026-08-18T18:40:00+08:00",
+    "scan_statuses": [
+      "PUBLIC_COMPLETE",
+      "OVERALL_PARTIAL"
+    ],
+    "baseline_action": "UPDATE_EXISTING_BASELINE",
+    "summary_notes": "使用未到期复查"
+  },
+  "benefit_changes": [],
+  "lead_changes": [],
+  "coverage_events": [
+    {
+      "vendor": "OpenAI",
+      "product": "ChatGPT",
+      "wallet": "UNKNOWN",
+      "surface": "Free / Signup",
+      "region": "GLOBAL",
+      "coverage_state": "REVIEW_NOT_DUE",
+      "scan_observed_at": "2026-08-18",
+      "actual_checked_at": "2026-08-18",
+      "next_review_at": "2026-09-18",
+      "source_id": null,
+      "basis_coverage_id": "COV-000001",
+      "notes": "未到期复用"
+    }
+  ],
+  "source_updates": [],
+  "manual_check_items": [],
+  "warnings": []
+}

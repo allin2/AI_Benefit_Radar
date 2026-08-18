@@ -7,7 +7,6 @@ from ai_benefit_desk.schemas.benefit_models import BenefitRecord
 def normalize_text(text: Optional[str]) -> str:
     if not text:
         return ""
-    # Lowercase and remove extra whitespace/punctuation
     t = text.lower().strip()
     t = re.sub(r"[\s\-_，。！？、]+", "", t)
     return t
@@ -21,7 +20,6 @@ class DedupService:
         c_camp_norm = normalize_text(candidate.campaign_name)
         c_source_norm = candidate.official_source.strip().lower() if candidate.official_source else ""
 
-        # Fetch existing active or all benefits
         existing_benefits = db.query(BenefitModel).all()
         
         for b in existing_benefits:
@@ -76,8 +74,8 @@ class DedupService:
     def detect_candidate_duplicates(db: Session, benefit_changes: List[Any]) -> List[Dict[str, Any]]:
         duplicates = []
         for op in benefit_changes:
-            if op.operation == "CREATE":
-                dup = DedupService.check_duplicate(db, op.benefit_record, op.local_ref)
+            if op.operation == "CREATE" and op.record:
+                dup = DedupService.check_duplicate(db, op.record, op.local_ref)
                 if dup:
                     duplicates.append(dup)
         return duplicates

@@ -46,21 +46,22 @@ def test_full_e2e_acceptance_loop():
             "package_type": "SCAN_IMPORT",
             "scan_result": {
                 "scan_id": scan_id_1,
-                "requested_mode": "FULL_SCAN",
-                "actual_scan_mode": "FULL_SCAN",
-                "baseline_action": "BUILD_INITIAL_BASELINE",
+                "scan_mode": "FULL_SCAN",
                 "context_baseline_revision": 0,
-                "scan_timestamp": "2026-08-18T12:00:00Z",
-                "public_scan_status": "PUBLIC_COMPLETE",
-                "overall_coverage_status": "OVERALL_PARTIAL",
+                "generated_at": "2026-08-18T18:25:00+08:00",
+                "scan_statuses": [
+                    "PUBLIC_COMPLETE",
+                    "OVERALL_PARTIAL"
+                ],
+                "baseline_action": "BUILD_INITIAL_BASELINE",
                 "summary_notes": "首次基线构建完成"
             },
             "benefit_changes": [
                 {
                     "operation": "CREATE",
                     "local_ref": "BNEW-001",
-                    "benefit_id": None,
-                    "benefit_record": {
+                    "record": {
+                        "benefit_id": None,
                         "vendor": "TRAE",
                         "product": "TRAE CN",
                         "campaign_name": "Daily Checkin Bonus",
@@ -81,14 +82,23 @@ def test_full_e2e_acceptance_loop():
                         "verification_status": "CONFIRMED",
                         "status": "ACTIVE",
                         "change_type": "UNKNOWN"
-                    }
+                    },
+                    "evidence": [
+                        {
+                            "url": "https://trae.cn/activity",
+                            "source_level": "S",
+                            "source_role": "PRIMARY",
+                            "checked_at": "2026-08-18T17:20:00+08:00",
+                            "supports_fields": ["benefit_detail", "status"]
+                        }
+                    ]
                 }
             ],
             "lead_changes": [
                 {
                     "operation": "CREATE",
                     "local_ref": "LNEW-001",
-                    "lead_record": {
+                    "record": {
                         "vendor": "Anthropic",
                         "product": "Claude Code",
                         "lead_summary": "疑似新用户赠送 20 美金 API Credits",
@@ -98,7 +108,8 @@ def test_full_e2e_acceptance_loop():
                         "first_seen": "2026-08-18",
                         "last_checked": "2026-08-18",
                         "status": "OPEN"
-                    }
+                    },
+                    "evidence": []
                 }
             ],
             "coverage_events": [
@@ -116,7 +127,7 @@ def test_full_e2e_acceptance_loop():
                 {
                     "operation": "ADD",
                     "local_ref": "SNEW-001",
-                    "source_record": {
+                    "record": {
                         "vendor": "TRAE",
                         "product": "TRAE CN",
                         "surface": "Client Reward",

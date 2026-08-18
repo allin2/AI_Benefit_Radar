@@ -1,0 +1,43 @@
+{
+  "protocol_version": "0.1",
+  "benefit_schema_version": "1.2.1",
+  "package_type": "SCAN_IMPORT",
+  "scan_result": {
+    "scan_id": "SCAN-20260818-002",
+    "scan_mode": "FULL_SCAN",
+    "context_baseline_revision": 1,
+    "generated_at": "2026-08-18T18:30:00+08:00",
+    "scan_statuses": [
+      "PUBLIC_COMPLETE",
+      "OVERALL_PARTIAL"
+    ],
+    "baseline_action": "UPDATE_EXISTING_BASELINE",
+    "summary_notes": "更新到期时间"
+  },
+  "benefit_changes": [
+    {
+      "operation": "UPDATE",
+      "benefit_id": "BEN-000001",
+      "change_type": "EXTENDED",
+      "patch": {
+        "end_date": "2026-09-30",
+        "last_checked": "2026-08-18",
+        "next_review_date": "2026-09-15"
+      },
+      "evidence": [
+        {
+          "url": "https://openai.com/blog/update",
+          "source_level": "S",
+          "source_role": "PRIMARY",
+          "checked_at": "2026-08-18T17:20:00+08:00",
+          "supports_fields": ["end_date"]
+        }
+      ]
+    }
+  ],
+  "lead_changes": [],
+  "coverage_events": [],
+  "source_updates": [],
+  "manual_check_items": [],
+  "warnings": []
+}
