@@ -97,6 +97,7 @@ class LeadModel(Base):
     status = Column(String(32), nullable=False, default="OPEN", index=True)  # OPEN / RESOLVED / REJECTED
     resolved_benefit_id = Column(String(32), nullable=True)
     rejection_reason = Column(Text, nullable=True)
+    checked_at = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -150,6 +151,7 @@ class CanonicalSourceModel(Base):
     source_level = Column(String(8), nullable=False)
     status = Column(String(32), nullable=False, default="ACTIVE", index=True)  # ACTIVE / DEPRECATED
     last_verified_at = Column(String(32), nullable=True)
+    deprecation_reason = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

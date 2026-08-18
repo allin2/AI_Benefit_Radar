@@ -69,6 +69,22 @@ def migrate_db_schema(target_engine):
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_coverage_history_coverage_state ON coverage_history (coverage_state)"))
             conn.commit()
 
+        # Check if checked_at exists in leads
+        res_lead = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='leads'")).fetchone()
+        if res_lead:
+            cols_lead = [c[1] for c in conn.execute(text("PRAGMA table_info(leads)")).fetchall()]
+            if "checked_at" not in cols_lead:
+                conn.execute(text("ALTER TABLE leads ADD COLUMN checked_at VARCHAR(64)"))
+                conn.commit()
+
+        # Check if deprecation_reason exists in canonical_sources
+        res_src = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='canonical_sources'")).fetchone()
+        if res_src:
+            cols_src = [c[1] for c in conn.execute(text("PRAGMA table_info(canonical_sources)")).fetchall()]
+            if "deprecation_reason" not in cols_src:
+                conn.execute(text("ALTER TABLE canonical_sources ADD COLUMN deprecation_reason TEXT"))
+                conn.commit()
+
 
 def check_legacy_lead_compatibility(target_engine):
     """Check for legacy OPEN + CONFIRMED leads in the database and report compatibility warnings."""

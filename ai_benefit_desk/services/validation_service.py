@@ -8,7 +8,7 @@ from ai_benefit_desk.db.models import (
 )
 from ai_benefit_desk.schemas.benefit_models import BenefitRecord
 from ai_benefit_desk.schemas.protocol_models import (
-    ScanImportPackage, BenefitChangeOperation, LeadChangeOperation, LeadRecord, CanonicalSourceItem
+    ScanImportPackage, BenefitChangeOperation, LeadChangeOperation, LeadRecord, CanonicalSourceItem, CoverageEventItem
 )
 from ai_benefit_desk.utils.date_utils import is_review_due
 
@@ -104,12 +104,51 @@ class ValidationService:
 
         # 4. Coverage & Scan Completion Consistency (NOT_CHECKED Gate)
         scan_statuses = set(import_pkg.scan_result.scan_statuses)
-        has_not_checked = any(c.coverage_state == "NOT_CHECKED" for c in import_pkg.coverage_events)
-        if has_not_checked:
+        
+        def is_clearly_critical_surface(c: CoverageEventItem) -> bool:
+            s = (c.surface or "").upper()
+            critical_kws = [
+                "PRICING", "SIGNUP", "REGISTER", "REGISTRATION", "HOME", "HOMEPAGE",
+                "DOCS", "OFFICIAL_DOCS", "BILLING", "PLAN", "PRICE", "API",
+                "CLIENT_REWARD", "MAIN_PAGE", "PROMOTION", "ACTIVITY"
+            ]
+            return any(kw in s for kw in critical_kws)
+
+        def is_clearly_non_critical_surface(c: CoverageEventItem) -> bool:
+            s = (c.surface or "").upper()
+            non_critical_kws = ["COMMUNITY", "FORUM", "THIRD_PARTY", "BLOG", "SOCIAL", "MEDIA", "UNOFFICIAL", "EXTRA"]
+            return any(kw in s for kw in non_critical_kws)
+
+        critical_not_checked = []
+        non_critical_not_checked = []
+        uncertain_not_checked = []
+
+        for c in import_pkg.coverage_events:
+            if c.coverage_state == "NOT_CHECKED":
+                if is_clearly_critical_surface(c):
+                    critical_not_checked.append(c)
+                elif is_clearly_non_critical_surface(c):
+                    non_critical_not_checked.append(c)
+                else:
+                    uncertain_not_checked.append(c)
+
+        if critical_not_checked:
             if "SCAN_INCOMPLETE" not in scan_statuses:
                 result.add_error("存在关键待检查 (NOT_CHECKED) 项时，扫描状态必须包含 SCAN_INCOMPLETE")
             if "PUBLIC_COMPLETE" in scan_statuses:
                 result.add_error("存在关键待检查 (NOT_CHECKED) 项时，扫描状态不能声明为公开扫描完成 (PUBLIC_COMPLETE)")
+
+        if non_critical_not_checked:
+            result.add_warning(
+                "NON_CRITICAL_NOT_CHECKED",
+                f"存在 {len(non_critical_not_checked)} 个非关键渠道未检查 (NOT_CHECKED) 项，不阻塞整轮扫描完成状态。"
+            )
+
+        if uncertain_not_checked:
+            result.add_warning(
+                "UNCERTAIN_SURFACE_NOT_CHECKED",
+                f"存在 {len(uncertain_not_checked)} 个渠道重要度未确定的未检查 (NOT_CHECKED) 项，建议人工复核。"
+            )
 
         # 5. Mode-specific & REVIEW_NOT_DUE Coverage Gate & Source ID Existence
         is_deep_scan = (import_pkg.scan_result.scan_mode == "DEEP_FULL_SCAN")
@@ -221,28 +260,23 @@ class ValidationService:
 
         for bop in import_pkg.benefit_changes:
             if bop.operation == "CREATE":
-                if check_local_ref(bop.local_ref, "Benefit CREATE"):
-                    created_benefit_refs.add(bop.local_ref)
+                check_local_ref(bop.local_ref, "Benefit CREATE")
+                created_benefit_refs.add(bop.local_ref)
 
-                if not bop.record:
-                    result.add_error(f"Benefit CREATE 操作必须包含 record 对象: {bop.local_ref}")
-                else:
+                if bop.record:
                     if bop.record.benefit_id is not None:
-                        result.add_error(f"Benefit CREATE 操作的 record.benefit_id 必须为 null，由 Benefit Desk 分配。(提供了: {bop.record.benefit_id})")
-                    
-                    # Evidence Gate check
-                    rec = bop.record
-                    if rec.verification_status == "CONFIRMED":
-                        has_sa_evidence = (
-                            rec.source_level in ("S", "A") or
+                        result.add_error(f"新福利记录在 CREATE 时 benefit_id 必须为 null，永久 ID 由 Benefit Desk 分配。(提供了: {bop.record.benefit_id})")
+
+                    # Evidence Gate for CONFIRMED
+                    if bop.record.verification_status == "CONFIRMED":
+                        s_level = bop.record.source_level
+                        has_sa = (
+                            s_level in ("S", "A") or
                             any(e.source_level in ("S", "A") for e in bop.evidence)
                         )
-                        if not has_sa_evidence:
-                            gate_msg = f"确认级别与证据不匹配: 福利 [{rec.campaign_name}] 标记为 CONFIRMED，但缺乏 S 或 A 级第一方证据"
+                        if not has_sa:
+                            gate_msg = f"确认级别与证据不匹配: 福利 [{bop.local_ref}] 状态为 CONFIRMED，但缺乏 S 或 A 级第一方证据"
                             result.evidence_gate_failures.append({
-                                "campaign_name": rec.campaign_name,
-                                "vendor": rec.vendor,
-                                "source_level": rec.source_level,
                                 "local_ref": bop.local_ref,
                                 "message": gate_msg
                             })
@@ -259,14 +293,15 @@ class ValidationService:
                     if not existing:
                         result.add_error(f"Benefit UPDATE 指定的 benefit_id 不存在: {bop.benefit_id}")
                     else:
-                        if bop.patch is None or not isinstance(bop.patch, dict):
-                            result.add_error(f"Benefit UPDATE 操作必须提供 patch 字典 (benefit_id: {bop.benefit_id})")
+                        if bop.patch is None or not isinstance(bop.patch, dict) or not bop.patch:
+                            result.add_error(f"Benefit UPDATE 必须提供非空 patch 字典 (benefit_id: {bop.benefit_id})")
                         else:
                             if "benefit_id" in bop.patch:
                                 result.add_error(f"Benefit UPDATE patch 禁止修改 benefit_id (benefit_id: {bop.benefit_id})")
-                            
-                            for f_key in ("coverage_state", "scan_id", "user_action_state", "lead_id", "source_id"):
-                                if f_key in bop.patch:
+
+                            allowed_benefit_fields = set(BenefitRecord.model_fields.keys()) - {"benefit_id"}
+                            for f_key in bop.patch.keys():
+                                if f_key not in allowed_benefit_fields:
                                     result.add_error(f"Benefit UPDATE patch 包含非法外来字段: {f_key} (benefit_id: {bop.benefit_id})")
 
                             existing_dict = {
@@ -346,6 +381,10 @@ class ValidationService:
                     existing = db.query(BenefitModel).filter_by(benefit_id=bop.benefit_id).first()
                     if not existing:
                         result.add_error(f"Benefit CONFIRM_NO_CHANGE 指定的 benefit_id 不存在: {bop.benefit_id}")
+                    if not bop.last_checked:
+                        result.add_error(f"Benefit CONFIRM_NO_CHANGE 必须提供复核日期 (last_checked): {bop.benefit_id}")
+                    if not bop.next_review_date:
+                        result.add_error(f"Benefit CONFIRM_NO_CHANGE 必须提供下次复查日期 (next_review_date): {bop.benefit_id}")
 
         # 7. Lead Operations Validation
         for lop in import_pkg.lead_changes:
@@ -357,6 +396,8 @@ class ValidationService:
                     result.add_error("已确认线索必须通过 RESOLVE_TO_BENEFIT 转为正式福利，不能继续保留为 CONFIRMED Lead。")
                 if not lop.vendor or not lop.lead_summary:
                     result.add_error(f"Lead CREATE 操作必须包含 vendor 和 lead_summary: {lop.local_ref}")
+                if not lop.first_seen or not lop.last_checked:
+                    result.add_error(f"Lead CREATE 必须提供 first_seen 和 last_checked 日期: {lop.local_ref}")
 
             elif lop.operation == "UPDATE":
                 if not lop.lead_id:
@@ -366,8 +407,8 @@ class ValidationService:
                     if not existing_lead:
                         result.add_error(f"Lead UPDATE 指定的 lead_id 不存在: {lop.lead_id}")
                     else:
-                        if lop.patch is None or not isinstance(lop.patch, dict):
-                            result.add_error(f"Lead UPDATE 必须提供 patch 字典 (lead_id: {lop.lead_id})")
+                        if lop.patch is None or not isinstance(lop.patch, dict) or not lop.patch:
+                            result.add_error(f"Lead UPDATE 必须提供非空 patch 字典 (lead_id: {lop.lead_id})")
                         else:
                             if "lead_id" in lop.patch:
                                 result.add_error(f"Lead UPDATE patch 禁止修改 lead_id (lead_id: {lop.lead_id})")
@@ -430,6 +471,8 @@ class ValidationService:
                 reason = lop.reason or lop.rejection_reason
                 if not reason:
                     result.add_error(f"Lead REJECT 必须提供驳回原因 (lead_id: {lop.lead_id})")
+                if not lop.checked_at:
+                    result.add_error(f"Lead REJECT 必须提供检查时间戳 (checked_at) (lead_id: {lop.lead_id})")
 
         # 8. Source Updates Validation
         for sop in import_pkg.source_updates:
@@ -437,8 +480,10 @@ class ValidationService:
                 check_local_ref(sop.local_ref, "Source ADD")
                 if sop.source_id is not None:
                     result.add_error(f"新官方入口必须使用 local_ref，source_id 由 Benefit Desk 分配。(提供了: {sop.source_id})")
-                if not sop.vendor or not sop.url:
-                    result.add_error(f"Source ADD 必须提供 vendor 和 url: {sop.local_ref}")
+                if not sop.vendor or not sop.url or not sop.product or not sop.surface or not sop.source_name:
+                    result.add_error(f"Source ADD 必须提供完整入口元数据 (vendor, product, surface, source_name, url): {sop.local_ref}")
+                if not sop.last_verified_at:
+                    result.add_error(f"Source ADD 必须提供 last_verified_at 时间戳: {sop.local_ref}")
             elif sop.operation == "UPDATE":
                 if not sop.source_id:
                     result.add_error("Source UPDATE 必须指定 source_id")
@@ -447,8 +492,8 @@ class ValidationService:
                     if not s_exist:
                         result.add_error(f"Source UPDATE 指定的 source_id 不存在: {sop.source_id}")
                     else:
-                        if sop.patch is None or not isinstance(sop.patch, dict):
-                            result.add_error(f"Source UPDATE 必须提供 patch 字典 (source_id: {sop.source_id})")
+                        if sop.patch is None or not isinstance(sop.patch, dict) or not sop.patch:
+                            result.add_error(f"Source UPDATE 必须提供非空 patch 字典 (source_id: {sop.source_id})")
                         else:
                             if "source_id" in sop.patch:
                                 result.add_error(f"Source UPDATE patch 禁止修改 source_id (source_id: {sop.source_id})")
@@ -483,6 +528,10 @@ class ValidationService:
                     s_exist = db.query(CanonicalSourceModel).filter_by(source_id=sop.source_id).first()
                     if not s_exist:
                         result.add_error(f"Source DEPRECATE 指定的 source_id 不存在: {sop.source_id}")
+                if not sop.reason:
+                    result.add_error(f"Source DEPRECATE 必须提供废弃原因 (reason) (source_id: {sop.source_id})")
+                if not sop.last_verified_at:
+                    result.add_error(f"Source DEPRECATE 必须提供 last_verified_at 时间戳 (source_id: {sop.source_id})")
 
         # 9. Manual Check Items Validation
         for mop in import_pkg.manual_check_items:

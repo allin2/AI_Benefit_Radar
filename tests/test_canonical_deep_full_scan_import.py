@@ -202,10 +202,12 @@ def test_flat_source_update_schema_and_validation(db_session):
             "product": "TestProd",
             "surface": "Pricing",
             "source_name": "Test Source",
+            "source_type": "OFFICIAL_PAGE",
+            "source_level": "S",
             "url": "https://test.com",
             "last_verified_at": "2026-08-18"  # missing timezone
         })
-    assert "timezone-aware" in str(exc_info.value)
+    assert "时区" in str(exc_info.value) or "timezone" in str(exc_info.value)
 
     # 2. Source ADD with unknown extra field raises extra_forbidden
     with pytest.raises(Exception) as exc_info:

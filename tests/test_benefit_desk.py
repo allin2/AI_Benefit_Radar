@@ -409,7 +409,9 @@ def test_012_source_deprecate_retains_record(db_session):
     payload = make_sample_import(db_session, "SCAN-20260818-012", rev=0)
     payload["source_updates"].append({
         "operation": "DEPRECATE",
-        "source_id": "SRC-000001"
+        "source_id": "SRC-000001",
+        "reason": "官方入口已废弃迁移",
+        "last_verified_at": "2026-08-18T18:00:00+08:00"
     })
     raw_json = dumps_json(payload)
     preview = ImportService.parse_and_preview(db_session, raw_json)
@@ -419,6 +421,8 @@ def test_012_source_deprecate_retains_record(db_session):
     src_updated = db_session.query(CanonicalSourceModel).filter_by(source_id="SRC-000001").first()
     assert src_updated is not None
     assert src_updated.status == "DEPRECATED"
+    assert src_updated.deprecation_reason == "官方入口已废弃迁移"
+    assert src_updated.last_verified_at == "2026-08-18T18:00:00+08:00"
 
 # TEST-013: User Benefit State 绝对不受 Scan Import 影响
 def test_013_user_benefit_state_protected(db_session):
@@ -1178,8 +1182,30 @@ def test_033_not_checked_commit_persists_null_actual_checked_at(db_session):
     assert preview_inv["is_valid"] is False
     assert any("必须提供实际检查时间戳" in e for e in preview_inv["errors"])
 
-# TEST-034: Source ADD remains exportable with timezone-aware fallback timestamp
+# TEST-034: Source ADD requires timezone-aware timestamp and remains exportable
 def test_034_source_add_remains_exportable(db_session):
+    # Case A: Missing last_verified_at -> FAIL
+    payload_inv = make_sample_import(db_session, "SCAN-20260818-034-INV", rev=0)
+    payload_inv["source_updates"] = [
+        {
+            "operation": "ADD",
+            "local_ref": "SNEW-001",
+            "vendor": "OpenAI",
+            "product": "ChatGPT",
+            "surface": "Docs",
+            "source_name": "OpenAI Developer Platform",
+            "url": "https://platform.openai.com/docs",
+            "source_type": "OFFICIAL_DOCS",
+            "source_level": "S",
+            "status": "ACTIVE",
+            "last_verified_at": None
+        }
+    ]
+    preview_inv = ImportService.parse_and_preview(db_session, dumps_json(payload_inv))
+    assert preview_inv["is_valid"] is False
+    assert any("last_verified_at" in e for e in preview_inv["errors"])
+
+    # Case B: Valid timezone-aware timestamp -> PASS
     payload = make_sample_import(db_session, "SCAN-20260818-034", rev=0)
     payload["source_updates"] = [
         {
@@ -1193,7 +1219,7 @@ def test_034_source_add_remains_exportable(db_session):
             "source_type": "OFFICIAL_DOCS",
             "source_level": "S",
             "status": "ACTIVE",
-            "last_verified_at": None  # Trigger fallback
+            "last_verified_at": "2026-08-18T18:00:00+08:00"
         }
     ]
     raw_json = dumps_json(payload)
@@ -1205,9 +1231,8 @@ def test_034_source_add_remains_exportable(db_session):
     # Verify DB CanonicalSourceModel timestamp is timezone-aware
     src = db_session.query(CanonicalSourceModel).filter_by(source_name="OpenAI Developer Platform").first()
     assert src is not None
-    assert src.last_verified_at is not None
+    assert src.last_verified_at == "2026-08-18T18:00:00+08:00"
     assert is_valid_timezone_iso8601(src.last_verified_at)
-    assert src.last_verified_at != today_str()
 
     # Re-export Scan Context and verify Pydantic serialization
     context_pkg = ExportService.generate_scan_context(db_session, requested_mode="FULL_SCAN")
@@ -1633,7 +1658,8 @@ def test_040_permanent_id_ownership(db_session):
         "url": "https://openai.com/pricing",
         "source_type": "OFFICIAL_PAGE",
         "source_level": "S",
-        "status": "ACTIVE"
+        "status": "ACTIVE",
+        "last_verified_at": "2026-08-18T18:00:00+08:00"
     })
     prev_b = ImportService.parse_and_preview(db_session, dumps_json(p_b))
     assert prev_b["is_valid"] is False
@@ -1697,7 +1723,8 @@ def test_040_permanent_id_ownership(db_session):
         "url": "https://openai.com/pricing",
         "source_type": "OFFICIAL_PAGE",
         "source_level": "S",
-        "status": "ACTIVE"
+        "status": "ACTIVE",
+        "last_verified_at": "2026-08-18T18:00:00+08:00"
     })
     raw_e = dumps_json(p_e)
     prev_e = ImportService.parse_and_preview(db_session, raw_e)
