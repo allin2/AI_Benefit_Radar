@@ -43,15 +43,3 @@ class CoveragePlanner:
             return False
         else:
             return None
-
-    @classmethod
-    def has_forced_review_signal(
-        cls,
-        vendor: str,
-        product: str,
-        surface: str,
-        region: str
-    ) -> Optional[str]:
-        """Check if forced early review signal exists for this coverage key.
-        Returns the reason string if forced, None otherwise."""
-        return VendorPoolConfig.has_forced_review_signal(vendor, product, surface, region)

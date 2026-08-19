@@ -201,6 +201,7 @@ class ScanModel(Base):
     generated_context_at = Column(DateTime, nullable=True)
     imported_at = Column(DateTime, nullable=True)
     _scan_statuses = Column("scan_statuses", Text, nullable=True)
+    _forced_review_requirements = Column("forced_review_requirements", Text, nullable=True, default="[]")
     import_status = Column(String(32), nullable=False, default="EXPORTED", index=True)  # EXPORTED, COMMITTED, CANCELLED
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -214,6 +215,17 @@ class ScanModel(Base):
     @scan_statuses.setter
     def scan_statuses(self, val):
         self._scan_statuses = json.dumps(val, ensure_ascii=False) if val else "{}"
+
+    @property
+    def forced_review_requirements(self):
+        try:
+            return json.loads(self._forced_review_requirements) if self._forced_review_requirements else []
+        except Exception:
+            return []
+
+    @forced_review_requirements.setter
+    def forced_review_requirements(self, val):
+        self._forced_review_requirements = json.dumps(val, ensure_ascii=False) if val is not None else "[]"
 
 
 class ImportAuditModel(Base):

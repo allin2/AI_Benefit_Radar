@@ -104,30 +104,43 @@ AI_Benefit_Randar/
 
 ---
 
-## 🏗️ Coverage Architecture
+## 🏗️ Coverage & Review Architecture
 
 ```mermaid
-graph LR
-    VP[Vendor Pool V1.2<br/>vendor_pool_config.py] --> CP[CoveragePlanner<br/>coverage_planner.py]
-    CP --> VS[ValidationService<br/>validation_service.py]
-    VP -->|forced_review_signals| VS
+graph TD
+    VP[Vendor Pool V1.2<br/>vendor_pool_config.py] -->|Mandatory Specs<br/>Atomic Programs| CP[CoveragePlanner<br/>coverage_planner.py]
+    CP -->|is_mandatory_surface| VS[ValidationService<br/>validation_service.py]
+    RP[ReviewPlanner<br/>review_service.py] -->|Plan Forced Reviews| ES[ExportService<br/>export_service.py]
+    ES -->|Persist forced_review_requirements| SM[(ScanModel / SQLite)]
+    SM -->|Read scan requirements| VS
     VS -->|errors / warnings| IS[ImportService<br/>import_service.py]
 ```
 
-**数据流**：
+**核心设计原则**：
 
-- **Mandatory Surface 判定**：`VendorPoolConfig` → `CoveragePlanner.is_mandatory_surface(vendor, product, surface)` → `ValidationService`
-- **Criticality 三态**：`MANDATORY` / `OPTIONAL` / `UNKNOWN`
-  - Vendor/Product 级别 mandatory surface 来自 Vendor Pool（非全局关键词猜测）
-  - `NOT_CHECKED` + mandatory → 必须 `SCAN_INCOMPLETE`，禁止 `PUBLIC_COMPLETE`
-  - `NOT_CHECKED` + optional → `NON_MANDATORY_NOT_CHECKED` 警告，不阻断
-  - `NOT_CHECKED` + UNKNOWN → `COVERAGE_CRITICALITY_UNKNOWN` 警告，不阻断也不假设
-- **BLIND_SPOT 语义**：Hidden Account 等控制台渠道公开不可观察时标为 `BLIND_SPOT`，允许 `PUBLIC_COMPLETE` + `OVERALL_PARTIAL`
-- **Forced Early Review**：即使 `next_review_at` 未到期，若存在强制提前复查信号，`REVIEW_NOT_DUE` 仍被拒绝
+1. **Mandatory Surface 判定**：
+   - Mandatory Surface 来自 `VendorPoolConfig` 规范注册（非全局关键词猜测）。
+   - **原子粒度 (Atomic Granularity)**：`PROGRAMS` 不是粗粒度遮蔽伞，而是细化为 `PROGRAM_STUDENT`、`PROGRAM_STARTUP`、`PROGRAM_RESEARCH`、`PROGRAM_DEVELOPER`、`PROGRAM_OPEN_SOURCE` 等独立原子项。
+   - `NOT_CHECKED` + mandatory → 必须 `SCAN_INCOMPLETE`，严禁 `PUBLIC_COMPLETE`。
+   - `NOT_CHECKED` + optional → `NON_MANDATORY_NOT_CHECKED` 结构化警告，不阻断。
+   - `NOT_CHECKED` + UNKNOWN → `COVERAGE_CRITICALITY_UNKNOWN` 警告，不假设也不阻断。
+
+2. **BLIND_SPOT 语义**：
+   - 针对控制台、桌面端或内部渠道（如 `HIDDEN_ACCOUNT`），若公开 Web 不可观测，标记为 `BLIND_SPOT`，允许 `PUBLIC_COMPLETE` + `OVERALL_PARTIAL` 成立。
+
+3. **Forced Early Review 闭环**：
+   - 信号源自 `ReviewPlanner`（从待复查线索、已废弃信源、争议福利等事实推导）。
+   - 信号随扫描批次持久化至 `ScanModel.forced_review_requirements`，进程重启/多 Worker 间完全一致。
+   - 必须精确匹配完整 Coverage Key (`vendor`, `product`, `surface`, `region`)。
+   - 存在强制提前复查要求时，即使未到 `next_review_at`，亦严禁使用 `REVIEW_NOT_DUE`。
+
+4. **Initial Baseline 语义 (CREATE ≠ NEW)**：
+   - 首次建立基线时，既有历史福利显式携带 `UNKNOWN` 保持 `UNKNOWN`；合法新推福利携带 `NEW` 保持 `NEW`。
+   - Desk 绝不静默篡改事实。
 
 ---
 
-## 🧪 自动化测试验证 (126 Tests — Protocol Regression & Lifecycle & Strict Compliance)
+## 🧪 自动化测试验证 (130 Tests — Protocol Regression & Lifecycle & Strict Compliance)
 
 - `TEST-001`: 首次 EMPTY Context 可以正常导出
 - `TEST-002`: CREATE Benefit 入库后生成永久 benefit_id
@@ -165,11 +178,14 @@ graph LR
 - `TEST-034`: Source ADD 必须提供 last_verified_at 时间戳 (缺失 → Validation FAIL)
 - `TEST-035`: 新建 Manual Check 必须使用 local_ref，严禁外部自定义永久 manual_check_id
 - `TEST-036 ~ TEST-059`: 增量 patch 合并校验、Lead 终态防护、Source Schema、amount 语义、Dedup 等
-- **Vendor-Specific Coverage Tests**: OpenAI REFERRAL/PARTNER_BUNDLE mandatory、optional surface 不阻断、UNKNOWN criticality 警告、BLIND_SPOT 合法
+- **Vendor Pool Canonical Coverage**: 覆盖 OpenAI、Anthropic、Google、Microsoft、GitHub、Qoder、Kimi、MiniMax、Mistral AI、Meta、ByteDance、Alibaba、Tencent、TRAE、Cursor、Windsurf、DeepSeek、xAI、Perplexity、Zhipu 等全矩阵
+- **Program Atomicity Tests**: 单独满足 `PROGRAM_STUDENT` 不能视为完成其他必查 Program
+- **BLIND_SPOT Semantics**: 验证控制台不可观测渠道合法支持 `PUBLIC_COMPLETE` + `OVERALL_PARTIAL`
+- **Planner-Driven Forced Review Tests**: 规划层产生信号 → `ScanModel` 持久化 → 校验层阻断 `REVIEW_NOT_DUE` → 重启/重载后持久生效
 - **Initial Baseline NEW Semantics**: UNKNOWN 保持、合法 NEW 保留、CREATE ≠ NEW
 - **Warning Extensibility**: 已知类型 PASS、未知但合法类型 PASS、空类型 FAIL
-- **Forced Review Signal**: 无信号 REVIEW_NOT_DUE PASS、有信号 FAIL、信号必须匹配完整 Coverage Key
-- **E2E Lifecycles**: 初始基线 → 增量更新 → 查重处理 → Package 内查重 → 校验完整性
-- **Real Fixture E2E**: `AI-Benefit-Scan-Import-SCAN-20260818-001.json` (112 Benefits + 9 Leads + 92 Sources + 340 Coverage + 11 Manual Checks)
+- **E2E Lifecycles**: 生命周期 A~E 全流程测试 PASS
+- **Real Fixture E2E**: `AI-Benefit-Scan-Import-SCAN-20260818-001.json` (112 Benefits + 9 Leads + 92 Sources + 340 Coverage + 11 Manual Checks) 预览与提交回归 PASS
+
 
 

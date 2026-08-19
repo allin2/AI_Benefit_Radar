@@ -223,8 +223,9 @@ class ValidationService:
                     continue
 
                 # Condition 7.6: No forced early review signal
-                force_reason = VendorPoolConfig.has_forced_review_signal(
-                    cov.vendor, cov.product, cov.surface, cov.region
+                forced_reqs = scan_rec.forced_review_requirements if scan_rec else []
+                force_reason = VendorPoolConfig.check_forced_review_in_requirements(
+                    forced_reqs, cov.vendor, cov.product, cov.surface, cov.region
                 )
                 if force_reason:
                     msg = f"存在强制提前复查信号 ({force_reason})，禁止使用 REVIEW_NOT_DUE。(Vendor: {cov.vendor}, Product: {cov.product}, Surface: {cov.surface}, Region: {cov.region})"

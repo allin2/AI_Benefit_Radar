@@ -194,7 +194,7 @@ class ImportService:
                     lref = dup.get("local_ref")
                     res = dedup_resolutions.get(lref)
                     if not res or (res not in ("KEEP_SEPARATE", "IGNORE") and not res.startswith("MERGE_LOCAL:")):
-                        raise ValueError(f"存在尚未处理的冲突福利，请先选择处理方式。")
+                        raise ValueError("存在尚未处理的冲突福利，请先选择处理方式。")
 
             # Handle intra-package candidate merges (MERGE_LOCAL)
             bop_by_ref = {bop.local_ref: bop for bop in import_pkg.benefit_changes if bop.operation == "CREATE" and bop.local_ref}
@@ -242,8 +242,6 @@ class ImportService:
                     local_ref_to_id[mop.local_ref] = IdService.generate_manual_check_id(db)
 
             # 4. Process Benefit Changes
-            is_initial_baseline = (import_pkg.scan_result.baseline_action == "BUILD_INITIAL_BASELINE")
-
             for bop in import_pkg.benefit_changes:
                 lref = getattr(bop, "local_ref", None)
                 res = dedup_resolutions.get(lref) if lref else None

@@ -12,6 +12,7 @@ from ai_benefit_desk.schemas.protocol_models import (
     CoverageEventItem, CanonicalSourceItem, UserBenefitStateItem, ManualCheckItem
 )
 from ai_benefit_desk.services.id_service import IdService
+from ai_benefit_desk.services.review_service import ReviewPlanner
 from ai_benefit_desk.utils.date_utils import is_review_due, parse_date, now_timezone_iso
 
 class ExportService:
@@ -33,6 +34,9 @@ class ExportService:
         # 2. Generate scan_id
         scan_id = IdService.generate_scan_id(db, today)
 
+        # Plan forced review requirements
+        forced_reqs = ReviewPlanner.plan_forced_reviews(db, scan_id=scan_id, requested_mode=requested_mode)
+
         # Record scan in scans table
         scan_record = ScanModel(
             scan_id=scan_id,
@@ -41,6 +45,7 @@ class ExportService:
             generated_context_at=datetime.utcnow(),
             import_status="EXPORTED"
         )
+        scan_record.forced_review_requirements = forced_reqs
         db.add(scan_record)
         db.commit()
 

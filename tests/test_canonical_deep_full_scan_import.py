@@ -143,7 +143,7 @@ def test_real_deep_full_scan_import_preview_and_commit(db_session):
     all_b = db_session.query(BenefitModel).all()
     for b in all_b:
         assert b.benefit_id.startswith("BEN-")
-        # Under BUILD_INITIAL_BASELINE, change_type should be normalized to UNKNOWN
+        # Fixture explicitly carries change_type UNKNOWN for all baseline benefits; Desk preserves it
         assert b.change_type == "UNKNOWN"
 
     all_l = db_session.query(LeadModel).all()

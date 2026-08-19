@@ -756,13 +756,13 @@ def test_coverage_mandatory_surfaces_completion_gate(db_session):
     assert prev_b["is_valid"] is False
     assert any("SCAN_INCOMPLETE" in e for e in prev_b["errors"])
 
-    # Case C: Mandatory PROGRAMS + NOT_CHECKED -> SCAN_INCOMPLETE required
+    # Case C: Mandatory DOCS + NOT_CHECKED -> SCAN_INCOMPLETE required
     pkg_c = make_base_import(db_session, "SCAN-20260819-COV-C", rev=0)
     pkg_c["scan_result"]["scan_statuses"] = ["PUBLIC_COMPLETE"]
     pkg_c["coverage_events"] = [{
         "vendor": "Google",
         "product": "Google AI Studio",
-        "surface": "PROGRAMS",
+        "surface": "DOCS",
         "region": "GLOBAL",
         "coverage_state": "NOT_CHECKED",
         "scan_observed_at": "2026-08-19T00:30:00+08:00"

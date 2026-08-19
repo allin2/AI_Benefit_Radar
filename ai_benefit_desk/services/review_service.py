@@ -1,11 +1,11 @@
 from datetime import date
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 from ai_benefit_desk.db.models import (
     BenefitModel, LeadModel, CoverageHistoryModel, ManualCheckModel,
-    UserBenefitStateModel, ScanModel, SystemStateModel
+    CanonicalSourceModel, UserBenefitStateModel, ScanModel, SystemStateModel
 )
-from ai_benefit_desk.utils.date_utils import is_expiring_soon, is_review_due, today_str
+from ai_benefit_desk.utils.date_utils import is_expiring_soon, is_review_due
 
 class ReviewService:
     @staticmethod
@@ -76,3 +76,96 @@ class ReviewService:
             "latest_scan_id": latest_scan.scan_id if latest_scan else "-",
             "latest_scan_time": latest_scan.created_at.strftime("%Y-%m-%d %H:%M") if (latest_scan and latest_scan.created_at) else "-"
         }
+
+
+class ReviewPlanner:
+    """Planner responsible for determining review requirements and forced review signals."""
+
+    @staticmethod
+    def plan_forced_reviews(
+        db: Session,
+        scan_id: Optional[str] = None,
+        requested_mode: str = "FULL_SCAN"
+    ) -> List[Dict[str, str]]:
+        """Compute forced early review requirements for the scan.
+
+        Triggers include:
+        1. Open Leads indicating major promotion/pricing changes
+        2. Deprecated sources requiring re-verification of the associated surface
+        3. Benefits with DISPUTED or LIKELY status needing confirmation
+
+        Returns:
+            List of dicts: {"vendor": ..., "product": ..., "surface": ..., "region": ..., "reason": ...}
+        """
+        requirements: List[Dict[str, str]] = []
+        seen_keys = set()
+
+        # 1. Open Leads with promotional/pricing changes
+        leads = db.query(LeadModel).filter_by(status="OPEN").all()
+        for lead in leads:
+            surface = "PRICING"
+            for region in lead.regions:
+                key = (lead.vendor, lead.product, surface, region)
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    requirements.append({
+                        "vendor": lead.vendor,
+                        "product": lead.product,
+                        "surface": surface,
+                        "region": region,
+                        "reason": f"Open Lead pending verification: {lead.lead_summary}"
+                    })
+
+        # 2. Canonical Sources with status DEPRECATED
+        dep_sources = db.query(CanonicalSourceModel).filter_by(status="DEPRECATED").all()
+        for s in dep_sources:
+            surface = s.surface
+            key = (s.vendor, s.product, surface, "GLOBAL")
+            if key not in seen_keys:
+                seen_keys.add(key)
+                requirements.append({
+                    "vendor": s.vendor,
+                    "product": s.product,
+                    "surface": surface,
+                    "region": "GLOBAL",
+                    "reason": f"Canonical source deprecated: {s.url} ({s.deprecation_reason or 'deprecated'})"
+                })
+
+        # 3. Disputed or expirable benefits
+        disputed = db.query(BenefitModel).filter(
+            BenefitModel.verification_status.in_(["DISPUTED", "LIKELY"])
+        ).all()
+        for b in disputed:
+            surface = "PRICING"
+            for region in b.regions:
+                key = (b.vendor, b.product, surface, region)
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    requirements.append({
+                        "vendor": b.vendor,
+                        "product": b.product,
+                        "surface": surface,
+                        "region": region,
+                        "reason": f"Benefit {b.benefit_id} in {b.verification_status} status requires re-verification"
+                    })
+
+        return requirements
+
+    @staticmethod
+    def register_scan_forced_reviews(
+        db: Session,
+        scan_id: str,
+        requirements: List[Dict[str, str]]
+    ) -> None:
+        """Persist forced review requirements on ScanModel."""
+        scan = db.query(ScanModel).filter_by(scan_id=scan_id).first()
+        if scan:
+            existing = list(scan.forced_review_requirements)
+            existing_keys = {(r.get("vendor"), r.get("product"), r.get("surface"), r.get("region")) for r in existing}
+            for req in requirements:
+                k = (req.get("vendor"), req.get("product"), req.get("surface"), req.get("region"))
+                if k not in existing_keys:
+                    existing.append(req)
+                    existing_keys.add(k)
+            scan.forced_review_requirements = existing
+            db.commit()
