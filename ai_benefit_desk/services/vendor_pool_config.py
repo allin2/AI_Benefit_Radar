@@ -9,7 +9,8 @@ Design principles:
 - PROGRAMS is NOT an atomic mandatory surface. Individual programs
   (PROGRAM_STUDENT, PROGRAM_STARTUP, REFERRAL, etc.) are atomic.
 - Product aliases allow fuzzy matching of real scan data to canonical keys.
-- Forced review signals are persisted on ScanModel, not process memory.
+- Region-specific products (CN vs International) are preserved separately.
+- Forced review signals are persisted on ScanModel (DB) and match full coverage key.
 """
 from typing import Dict, List, Optional, Set, Tuple
 from enum import Enum
@@ -40,10 +41,8 @@ class ProductSpec:
 # Vendor Pool V1.2 — Complete Canonical Registry
 # =============================================================================
 # Each vendor maps to a list of ProductSpec.
-# Mandatory surfaces use ATOMIC granularity:
-#   - No "PROGRAMS" umbrella. Instead: PROGRAM_STUDENT, PROGRAM_STARTUP, etc.
-#   - REFERRAL is separate from programs.
-#   - PARTNER_BUNDLE, CLIENT_REWARD, HIDDEN_ACCOUNT are individual.
+# Mandatory surfaces use ATOMIC granularity.
+# Region-specific products (CN / International) are preserved as distinct specs.
 
 VENDOR_REGISTRY: Dict[str, List[ProductSpec]] = {
     # =========================================================================
@@ -56,12 +55,14 @@ VENDOR_REGISTRY: Dict[str, List[ProductSpec]] = {
             "REFERRAL", "REGION", "HIDDEN_ACCOUNT",
             "PROGRAM_STUDENT", "PROGRAM_STARTUP", "PROGRAM_RESEARCH",
             "PROGRAM_DEVELOPER", "PROGRAM_EDUCATION",
+            "CREDITS", "WALLET_GRANT",
         }, {"ChatGPT Business", "ChatGPT Business / Enterprise", "Codex / ChatGPT",
             "ChatGPT + Codex + API"}),
         ProductSpec("OpenAI API", {
             "PRICING", "MODEL_ECONOMICS",
             "PARTNER_BUNDLE", "BILLING_CONSOLE", "DOCS",
             "PROGRAM_STARTUP", "PROGRAM_RESEARCH",
+            "FREE_TIER", "CREDITS",
         }, {"API"}),
     ],
     "Anthropic": [
@@ -69,14 +70,16 @@ VENDOR_REGISTRY: Dict[str, List[ProductSpec]] = {
             "FREE_SIGNUP", "PRICING", "SUBSCRIPTION",
             "MODEL_ECONOMICS", "PARTNER_BUNDLE",
             "PROGRAM_STARTUP", "PROGRAM_RESEARCH",
+            "FREE_TIER",
         }, {"Claude + API"}),
         ProductSpec("Claude Code", {
-            "PRICING", "DOCS", "PARTNER_BUNDLE",
+            "PRICING", "DOCS", "PARTNER_BUNDLE", "FREE_TIER",
         }),
         ProductSpec("Anthropic API", {
             "PRICING", "MODEL_ECONOMICS",
             "PARTNER_BUNDLE", "BILLING_CONSOLE", "DOCS",
             "PROGRAM_STARTUP", "PROGRAM_RESEARCH",
+            "FREE_TIER",
         }, {"Anthropic API / AI for Science", "Anthropic API / Startup Program"}),
     ],
     "Google": [
@@ -84,15 +87,16 @@ VENDOR_REGISTRY: Dict[str, List[ProductSpec]] = {
             "FREE_SIGNUP", "PRICING", "SUBSCRIPTION",
             "MODEL_ECONOMICS", "PARTNER_BUNDLE",
             "PROGRAM_DEVELOPER", "PROGRAM_STARTUP",
+            "FREE_TIER", "HIDDEN_ACCOUNT",
         }, {"Gemini + AI Studio + Cloud"}),
         ProductSpec("Google AI Studio", {
             "PRICING", "MODEL_ECONOMICS",
-            "BILLING_CONSOLE", "DOCS",
+            "BILLING_CONSOLE", "DOCS", "FREE_TIER",
         }, {"Gemini API / Google AI Studio"}),
         ProductSpec("Vertex AI", {
             "PRICING", "MODEL_ECONOMICS",
             "PARTNER_BUNDLE", "BILLING_CONSOLE", "DOCS",
-            "PROGRAM_STARTUP",
+            "PROGRAM_STARTUP", "FREE_TIER",
         }),
         ProductSpec("Gemini CLI", {
             "PRICING", "DOCS",
@@ -113,7 +117,7 @@ VENDOR_REGISTRY: Dict[str, List[ProductSpec]] = {
         ProductSpec("Azure OpenAI", {
             "PRICING", "MODEL_ECONOMICS",
             "PARTNER_BUNDLE", "BILLING_CONSOLE", "DOCS",
-            "PROGRAM_STARTUP",
+            "PROGRAM_STARTUP", "FREE_TIER",
         }, {"Microsoft for Startups / Azure"}),
         ProductSpec("Azure for Students", {
             "PRICING", "PROGRAM_STUDENT",
@@ -123,7 +127,8 @@ VENDOR_REGISTRY: Dict[str, List[ProductSpec]] = {
         ProductSpec("GitHub Copilot", {
             "PRICING", "SUBSCRIPTION",
             "PARTNER_BUNDLE", "DOCS",
-            "PROGRAM_STUDENT", "PROGRAM_OPEN_SOURCE",
+            "PROGRAM_STUDENT", "PROGRAM_OPEN_SOURCE", "PROGRAM_TEACHER",
+            "FREE_TIER",
         }, {"Copilot + Models", "Copilot Pro / Pro+ / Max"}),
         ProductSpec("GitHub Copilot Free", {
             "FREE_SIGNUP", "PRICING",
@@ -139,40 +144,40 @@ VENDOR_REGISTRY: Dict[str, List[ProductSpec]] = {
     "ByteDance": [
         ProductSpec("Doubao", {
             "FREE_SIGNUP", "PRICING", "SUBSCRIPTION",
-            "MODEL_ECONOMICS",
+            "MODEL_ECONOMICS", "DAILY_LOGIN", "CREDITS", "ACTIVITY",
         }, {"豆包", "豆包 / Seedance 2.0"}),
         ProductSpec("Volcengine Ark", {
             "PRICING", "MODEL_ECONOMICS",
-            "BILLING_CONSOLE", "DOCS",
+            "BILLING_CONSOLE", "DOCS", "FREE_TIER", "COUPON", "TOKEN_PLAN",
         }, {"方舟", "方舟 Coding Plan"}),
     ],
     "Alibaba": [
         ProductSpec("Tongyi Qianwen", {
             "FREE_SIGNUP", "PRICING", "SUBSCRIPTION",
-            "MODEL_ECONOMICS",
+            "MODEL_ECONOMICS", "DAILY_CHECKIN", "CREDITS",
         }, {"Qwen"}),
-        ProductSpec("Alibaba Cloud Model Studio", {
+        ProductSpec("Alibaba Cloud Model Studio CN", {
             "PRICING", "MODEL_ECONOMICS",
-            "BILLING_CONSOLE", "DOCS",
-        }, {"百炼 / Model Studio CN", "百炼", "百炼知识库", "Model Studio CN"}),
+            "BILLING_CONSOLE", "DOCS", "FREE_TIER", "TOKEN_GRANT", "TOKEN_PLAN", "COUPON",
+        }, {"百炼 / Model Studio CN", "百炼", "百炼知识库", "Model Studio CN", "Alibaba Cloud Model Studio"}),
         ProductSpec("Model Studio International", {
             "PRICING", "MODEL_ECONOMICS",
-            "BILLING_CONSOLE", "DOCS",
+            "BILLING_CONSOLE", "DOCS", "FREE_TIER",
         }),
     ],
     "Tencent": [
         ProductSpec("Yuanbao", {
             "FREE_SIGNUP", "PRICING", "SUBSCRIPTION",
-            "MODEL_ECONOMICS",
+            "MODEL_ECONOMICS", "ACTIVITY",
         }),
         ProductSpec("WorkBuddy", {
-            "PRICING", "CLIENT_REWARD",
+            "PRICING", "CLIENT_REWARD", "CHECKIN", "TASK", "DAILY_LOGIN", "CREDITS", "INVITE",
         }, {"CodeBuddy", "WorkBuddy / CodeBuddy"}),
         ProductSpec("TokenHub CN", {
-            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE",
+            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "FREE_TIER", "DISCOUNT",
         }),
         ProductSpec("TokenHub International", {
-            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE",
+            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "FREE_TIER",
         }),
         ProductSpec("ADP CN", {
             "PRICING", "PROGRAM_DEVELOPER",
@@ -187,7 +192,7 @@ VENDOR_REGISTRY: Dict[str, List[ProductSpec]] = {
             "MODEL_ECONOMICS",
         }),
         ProductSpec("DeepSeek API", {
-            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "DOCS",
+            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "DOCS", "FREE_TIER",
         }),
     ],
 
@@ -196,21 +201,21 @@ VENDOR_REGISTRY: Dict[str, List[ProductSpec]] = {
     # =========================================================================
     "Mistral AI": [
         ProductSpec("Le Chat", {
-            "FREE_SIGNUP", "PRICING", "SUBSCRIPTION",
+            "FREE_SIGNUP", "PRICING", "SUBSCRIPTION", "FREE_TIER",
         }, {"Le Chat / Studio", "Le Chat + Studio", "Devstral 2 / Studio"}),
         ProductSpec("Mistral API", {
-            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "DOCS",
+            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "DOCS", "FREE_TIER",
         }, {"Studio"}),
         ProductSpec("Ambassador Program", {
             "PROGRAM_AMBASSADOR",
         }),
         ProductSpec("Education Pro", {
-            "PROGRAM_EDUCATION",
+            "PROGRAM_EDUCATION", "PROGRAM_STUDENT", "PROGRAM_TEACHER",
         }),
     ],
     "Meta": [
         ProductSpec("Llama", {
-            "DOCS",
+            "DOCS", "FREE_TIER",
         }),
         ProductSpec("Llama Startup Program", {
             "PROGRAM_STARTUP",
@@ -219,19 +224,19 @@ VENDOR_REGISTRY: Dict[str, List[ProductSpec]] = {
     "xAI": [
         ProductSpec("Grok", {
             "FREE_SIGNUP", "PRICING", "SUBSCRIPTION",
-            "MODEL_ECONOMICS",
+            "MODEL_ECONOMICS", "FREE_TIER",
         }, {"Grok 4.5", "SuperGrok Heavy"}),
         ProductSpec("xAI API", {
-            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "DOCS",
+            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "DOCS", "FREE_TIER",
         }, {"Grok Build"}),
         ProductSpec("Grok + API + Build", {
-            "PRICING", "MODEL_ECONOMICS",
+            "PRICING", "MODEL_ECONOMICS", "FREE_TIER",
         }),
     ],
     "Perplexity": [
         ProductSpec("Perplexity", {
             "FREE_SIGNUP", "PRICING", "SUBSCRIPTION",
-            "REFERRAL",
+            "REFERRAL", "STUDENT_DEAL",
         }),
     ],
 
@@ -240,79 +245,79 @@ VENDOR_REGISTRY: Dict[str, List[ProductSpec]] = {
     # =========================================================================
     "Kimi": [
         ProductSpec("Kimi", {
-            "FREE_SIGNUP", "PRICING", "SUBSCRIPTION",
+            "FREE_SIGNUP", "PRICING", "SUBSCRIPTION", "REFERRAL", "CREDITS", "ACTIVITY",
         }, {"Moonshot", "Kimi / Moonshot"}),
         ProductSpec("Kimi API", {
-            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "DOCS",
+            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "DOCS", "FREE_TIER", "CREDITS",
         }, {"Moonshot AI / Kimi API"}),
     ],
     "Zhipu": [
         ProductSpec("ChatGLM", {
             "FREE_SIGNUP", "PRICING", "SUBSCRIPTION",
-            "MODEL_ECONOMICS",
+            "MODEL_ECONOMICS", "GLM_CODING",
         }, {"GLM Coding", "智谱 GLM / Zhipu AI / GLM Coding"}),
         ProductSpec("Zhipu API", {
-            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "DOCS",
+            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "DOCS", "FREE_TIER", "CREDITS",
         }),
     ],
     "MiniMax": [
         ProductSpec("MiniMax", {
-            "FREE_SIGNUP", "PRICING", "SUBSCRIPTION",
+            "FREE_SIGNUP", "PRICING", "SUBSCRIPTION", "MIGRATION", "CREDITS",
         }, {"Subscription Migration"}),
         ProductSpec("Open Platform", {
-            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "DOCS",
+            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "DOCS", "FREE_TIER", "TOKEN_PLAN", "MIGRATION",
         }, {"Open Platform Token Plan"}),
     ],
     "Baidu": [
         ProductSpec("Qianfan", {
-            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "DOCS",
+            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "DOCS", "FREE_TIER", "TOKEN_PLAN", "COUPON",
         }, {"千帆", "千帆 Token 套餐", "百度千帆"}),
     ],
     "StepFun": [
         ProductSpec("StepFun", {
-            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE",
+            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "FREE_TIER", "STEP_PLAN",
         }, {"Step Plan", "StepFun / Step Plan", "阶跃星辰 / StepFun / Step Plan"}),
     ],
     "SenseTime": [
         ProductSpec("SenseNova", {
-            "PRICING", "MODEL_ECONOMICS",
+            "PRICING", "MODEL_ECONOMICS", "FREE_TIER", "TOKEN_PLAN",
         }, {"SenseNova Token Plan", "商汤 / SenseNova"}),
     ],
     "Xiaomi": [
         ProductSpec("MiMo", {
-            "PRICING", "MODEL_ECONOMICS",
+            "PRICING", "MODEL_ECONOMICS", "FREE_TIER", "SUBSCRIPTION",
         }, {"MiMo API", "MiMo Subscription", "小米 MiMo"}),
     ],
     "Meituan": [
         ProductSpec("LongCat", {
-            "PRICING", "MODEL_ECONOMICS",
+            "PRICING", "MODEL_ECONOMICS", "FREE_TIER",
         }, {"LongCat API", "美团 / LongCat"}),
     ],
     "Kuaishou": [
         ProductSpec("Kling", {
-            "PRICING", "SUBSCRIPTION",
+            "PRICING", "SUBSCRIPTION", "FREE_SIGNUP", "DAILY_CREDITS", "CHECKIN",
         }, {"可灵", "Kling / KAT", "Kling / 可灵"}),
         ProductSpec("KAT-Coder", {
-            "PRICING",
+            "PRICING", "FREE_TIER", "INVITE",
         }, {"KAT-Coder-Pro V2.5 → Kilo Code"}),
     ],
     "Huawei Cloud": [
         ProductSpec("AgentArts", {
-            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE",
+            "PRICING", "MODEL_ECONOMICS", "BILLING_CONSOLE", "FREE_TIER",
         }, {"AgentArts / ModelArts"}),
         ProductSpec("Developer Environment", {
-            "PRICING", "PROGRAM_DEVELOPER",
+            "PRICING", "PROGRAM_DEVELOPER", "FREE_COMPUTE",
         }),
         ProductSpec("OpenClaw", {
-            "PRICING",
+            "PRICING", "FREE_TIER",
         }, {"OpenClaw / AI Assistant"}),
     ],
     "Coze": [
         ProductSpec("Coze CN", {
-            "FREE_SIGNUP", "PRICING",
+            "FREE_SIGNUP", "PRICING", "SUBSCRIPTION", "CREDITS", "BOT_REWARD", "API_CREDITS",
         }, {"扣子", "扣子 / Coze CN", "Coze CN Subscription"}),
         ProductSpec("Coze Global", {
-            "FREE_SIGNUP", "PRICING",
+            "FREE_SIGNUP", "PRICING", "CREDITS", "BOT_REWARD", "API_CREDITS",
         }, {"Coze Global API"}),
     ],
 
@@ -321,73 +326,86 @@ VENDOR_REGISTRY: Dict[str, List[ProductSpec]] = {
     # =========================================================================
     "TRAE": [
         ProductSpec("TRAE CN", {
-            "CLIENT_REWARD", "PRICING",
+            "CLIENT_REWARD", "PRICING", "CHECKIN", "TASK", "INVITE", "PROGRAMS", "PROGRAM_DEVELOPER",
         }, {"TRAE CN Subscription", "TraeWork CN"}),
         ProductSpec("TRAE IDE", {
-            "CLIENT_REWARD", "PRICING",
+            "CLIENT_REWARD", "PRICING", "CHECKIN", "TASK", "INVITE", "PROGRAMS", "PROGRAM_DEVELOPER",
         }, {"TRAE Agent", "TRAE Global / Agent"}),
     ],
     "Cursor": [
         ProductSpec("Cursor", {
-            "FREE_SIGNUP", "PRICING", "SUBSCRIPTION",
+            "FREE_SIGNUP", "PRICING", "SUBSCRIPTION", "PROGRAM_STUDENT", "REFERRAL", "USAGE_LIMITS",
         }, {"Cursor Free"}),
     ],
     "Windsurf": [
         ProductSpec("Windsurf", {
-            "FREE_SIGNUP", "PRICING", "SUBSCRIPTION",
+            "FREE_SIGNUP", "PRICING", "SUBSCRIPTION", "PROGRAM_STUDENT", "REFERRAL", "USAGE_LIMITS",
         }, {"Windsurf Free"}),
     ],
     "Qoder": [
         ProductSpec("Qoder", {
-            "PRICING",
+            "EVENTS", "CREDITS", "DAILY_RESET", "FREE_CALLS", "SUBSCRIPTION_USAGE",
+            "MODEL_DISCOUNT", "MODEL_MULTIPLIER", "ACTIVITY", "ACCOUNT", "PRICING", "FREE_TIER",
         }, {"Qoder Pro Trial"}),
     ],
     "Cline": [
         ProductSpec("Cline", {
-            "FREE_SIGNUP", "PRICING",
+            "FREE_SIGNUP", "PRICING", "FREE_TIER",
         }, {"ClinePass"}),
         ProductSpec("Open Source Grant", {
-            "PROGRAM_OPEN_SOURCE",
+            "PROGRAM_OPEN_SOURCE", "GRANT",
         }),
     ],
     "Continue": [
         ProductSpec("Continue", {
-            "FREE_SIGNUP", "PRICING",
+            "FREE_SIGNUP", "PRICING", "DOCS",
         }),
     ],
     "Replit": [
         ProductSpec("Replit", {
             "FREE_SIGNUP", "PRICING", "SUBSCRIPTION",
-            "REFERRAL",
+            "REFERRAL", "CREDITS",
         }, {"Starter"}),
         ProductSpec("Startup Program", {
-            "PROGRAM_STARTUP",
+            "PROGRAM_STARTUP", "CREDITS",
         }),
     ],
     "JetBrains": [
         ProductSpec("JetBrains AI", {
-            "PRICING", "SUBSCRIPTION",
+            "PRICING", "SUBSCRIPTION", "FREE_TIER", "PROGRAM_STUDENT",
         }, {"AI Pro", "JetBrains AI Free"}),
     ],
     "Warp": [
         ProductSpec("Warp", {
-            "FREE_SIGNUP", "PRICING",
+            "FREE_SIGNUP", "PRICING", "REFERRAL",
         }),
     ],
     "Zed": [
         ProductSpec("Zed", {
-            "FREE_SIGNUP", "PRICING",
+            "FREE_SIGNUP", "PRICING", "PROGRAM_STUDENT", "PRO_TRIAL",
         }, {"Zed Pro Trial", "Zed Student"}),
     ],
     "OpenCode": [
         ProductSpec("OpenCode", {
-            "FREE_SIGNUP", "PRICING",
+            "FREE_SIGNUP", "PRICING", "FREE_TIER",
         }, {"OpenCode Go"}),
     ],
     "Augment Code": [
         ProductSpec("Augment Code", {
-            "PRICING",
+            "PRICING", "PROGRAM_OPEN_SOURCE", "FREE_TIER",
         }, {"Open Source"}),
+    ],
+
+    # =========================================================================
+    # Region-Separated / Community Tools
+    # =========================================================================
+    "HappyShrimp": [
+        ProductSpec("HappyShrimp CN", {
+            "PRICING", "FREE_SIGNUP", "CREDITS", "CHECKIN",
+        }, {"HappyShrimp", "快乐虾米 / HappyShrimp"}),
+        ProductSpec("HappyShrimp International", {
+            "PRICING", "FREE_SIGNUP", "CREDITS",
+        }),
     ],
 
     # =========================================================================
@@ -395,53 +413,48 @@ VENDOR_REGISTRY: Dict[str, List[ProductSpec]] = {
     # =========================================================================
     "OpenRouter": [
         ProductSpec("OpenRouter", {
-            "PRICING", "MODEL_ECONOMICS", "DOCS",
+            "PRICING", "MODEL_ECONOMICS", "DOCS", "FREE_TIER",
         }),
     ],
     "Together AI": [
         ProductSpec("Together AI", {
-            "PRICING", "MODEL_ECONOMICS", "DOCS",
+            "PRICING", "MODEL_ECONOMICS", "DOCS", "PROGRAM_STARTUP", "PROGRAM_RESEARCH", "FREE_TIER",
         }, {"Research Credits Program", "Startup Accelerator"}),
     ],
     "Fireworks AI": [
         ProductSpec("Fireworks AI", {
-            "PRICING", "MODEL_ECONOMICS", "DOCS",
+            "PRICING", "MODEL_ECONOMICS", "DOCS", "FREE_TIER",
         }, {"API", "GPU"}),
     ],
     "Groq": [
         ProductSpec("GroqCloud", {
-            "PRICING", "MODEL_ECONOMICS", "DOCS",
+            "PRICING", "MODEL_ECONOMICS", "DOCS", "FREE_TIER",
         }),
     ],
     "Cerebras": [
         ProductSpec("Cerebras", {
-            "PRICING", "MODEL_ECONOMICS", "DOCS",
+            "PRICING", "MODEL_ECONOMICS", "DOCS", "FREE_TIER",
         }, {"Inference API"}),
     ],
     "Hugging Face": [
         ProductSpec("Hugging Face", {
-            "PRICING", "MODEL_ECONOMICS", "DOCS",
+            "PRICING", "MODEL_ECONOMICS", "DOCS", "FREE_TIER",
         }, {"Inference Providers", "ZeroGPU"}),
     ],
     "Cloudflare": [
         ProductSpec("Workers AI", {
-            "PRICING", "MODEL_ECONOMICS", "DOCS",
+            "PRICING", "MODEL_ECONOMICS", "DOCS", "FREE_TIER",
         }),
     ],
     "SambaNova": [
         ProductSpec("SambaNova Cloud", {
-            "PRICING", "MODEL_ECONOMICS", "DOCS",
+            "PRICING", "MODEL_ECONOMICS", "DOCS", "FREE_TIER",
         }),
     ],
     "ModelScope": [
         ProductSpec("ModelScope", {
-            "PRICING", "DOCS",
+            "PRICING", "DOCS", "FREE_TIER",
         }, {"ModelScope API"}),
-    ],
-    "HappyShrimp": [
-        ProductSpec("HappyShrimp", {
-            "PRICING",
-        }, {"快乐虾米 / HappyShrimp"}),
     ],
 
     # =========================================================================
@@ -449,17 +462,17 @@ VENDOR_REGISTRY: Dict[str, List[ProductSpec]] = {
     # =========================================================================
     "AWS": [
         ProductSpec("AWS Activate", {
-            "PROGRAM_STARTUP",
+            "PROGRAM_STARTUP", "CREDITS",
         }),
     ],
     "Oracle": [
         ProductSpec("OCI Free Tier", {
-            "FREE_SIGNUP", "PRICING",
+            "FREE_SIGNUP", "PRICING", "FREE_TIER",
         }),
     ],
     "AMD": [
         ProductSpec("AMD Developer Cloud", {
-            "PROGRAM_DEVELOPER",
+            "PROGRAM_DEVELOPER", "FREE_COMPUTE",
         }, {"AI Developer Program / AMD Developer Cloud"}),
     ],
 }
@@ -491,6 +504,9 @@ VENDOR_ALIASES: Dict[str, str] = {
     "TRAE CN": "TRAE",
     "TRAE Global": "TRAE",
     "WorkBuddy": "Tencent",
+    "CodeBuddy": "Tencent",
+    "HappyShrimp CN": "HappyShrimp",
+    "HappyShrimp International": "HappyShrimp",
 }
 
 # Explicitly optional (never mandatory) surface categories
@@ -543,7 +559,10 @@ class VendorPoolConfig:
     def normalize_surface(surface: Optional[str]) -> str:
         if not surface:
             return ""
-        return surface.strip().upper().replace("-", "_").replace(" ", "_").replace("/", "_")
+        s = surface.strip().upper().replace("-", "_").replace(" ", "_").replace("/", "_")
+        if s == "CHECK_IN":
+            return "CHECKIN"
+        return s
 
     @classmethod
     def _resolve_vendor_product(cls, vendor: str, product: str) -> Optional[Tuple[str, str]]:
@@ -595,8 +614,12 @@ class VendorPoolConfig:
         resolved = cls._resolve_vendor_product(vendor, product)
         if resolved:
             mandatory_set = _MANDATORY_INDEX.get(resolved, set())
-            # Exact match only for mandatory (prevents PROGRAMS masking atomics)
+            # Exact match (including CHECKIN / CHECK_IN alias support)
             if norm_s in mandatory_set:
+                return CoverageCriticality.MANDATORY
+            if norm_s == "CHECKIN" and "CHECK_IN" in mandatory_set:
+                return CoverageCriticality.MANDATORY
+            if norm_s == "CHECK_IN" and "CHECKIN" in mandatory_set:
                 return CoverageCriticality.MANDATORY
 
         # Check explicitly optional (exact + substring for optional is fine)
@@ -611,9 +634,6 @@ class VendorPoolConfig:
     # =========================================================================
     # Forced Review Signals — DB-persisted via ScanModel
     # =========================================================================
-    # These class methods provide the interface. Actual persistence is on
-    # ScanModel.forced_review_requirements (JSON column).
-    # ValidationService reads from the scan record, not from process memory.
 
     @staticmethod
     def build_forced_review_entry(
@@ -628,21 +648,60 @@ class VendorPoolConfig:
             "reason": reason,
         }
 
-    @staticmethod
+    @classmethod
     def check_forced_review_in_requirements(
+        cls,
         requirements: List[dict],
         vendor: str, product: str, surface: str, region: str
     ) -> Optional[str]:
         """Check if a forced review requirement exists in a list.
-        Returns reason string if found, None otherwise."""
+        Returns reason string if found, None otherwise.
+
+        Matching semantics:
+        1. Exact match on (vendor, product, surface, region)
+        2. Broad match if requirement specifies region="UNKNOWN" or surface="UNKNOWN"
+        3. Vendor / product alias resolution.
+        """
+        canonical_vendor = VENDOR_ALIASES.get(vendor, vendor)
+
         for req in requirements:
-            if (req.get("vendor") == vendor and req.get("product") == product and
-                req.get("surface") == surface and req.get("region") == region):
+            req_v = req.get("vendor")
+            req_p = req.get("product")
+            req_s = req.get("surface")
+            req_r = req.get("region")
+
+            req_v_canon = VENDOR_ALIASES.get(req_v, req_v)
+            if req_v_canon != canonical_vendor:
+                continue
+
+            # Product matching
+            if req_p and req_p != "UNKNOWN":
+                if req_p != product:
+                    canon_p = _PRODUCT_ALIAS_INDEX.get((canonical_vendor, product), product)
+                    req_canon_p = _PRODUCT_ALIAS_INDEX.get((req_v_canon, req_p), req_p)
+                    if canon_p != req_canon_p:
+                        continue
+
+            # Surface matching: exact or broad (UNKNOWN)
+            norm_surface = cls.normalize_surface(surface)
+            norm_req_s = cls.normalize_surface(req_s) if req_s else ""
+            surface_match = (
+                req_s == "UNKNOWN" or
+                req_s == surface or
+                norm_req_s == norm_surface
+            )
+
+            # Region matching: exact or broad (UNKNOWN)
+            # Note: GLOBAL is an explicit region, only UNKNOWN acts as wildcard broad region
+            region_match = (req_r == "UNKNOWN" or req_r == region)
+
+            if surface_match and region_match:
                 return req.get("reason", "forced review")
+
         return None
 
     # =========================================================================
-    # Registry Introspection (for completeness testing)
+    # Registry Introspection (for parity contract testing)
     # =========================================================================
     @classmethod
     def get_all_registered_vendor_products(cls) -> List[Tuple[str, str]]:

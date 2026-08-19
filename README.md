@@ -110,7 +110,7 @@ AI_Benefit_Randar/
 graph TD
     VP[Vendor Pool V1.2<br/>vendor_pool_config.py] -->|Mandatory Specs<br/>Atomic Programs| CP[CoveragePlanner<br/>coverage_planner.py]
     CP -->|is_mandatory_surface| VS[ValidationService<br/>validation_service.py]
-    RP[ReviewPlanner<br/>review_service.py] -->|Plan Forced Reviews| ES[ExportService<br/>export_service.py]
+    RP[ReviewPlanner<br/>review_service.py] -->|Plan Forced Reviews<br/>Exact Surface & Region| ES[ExportService<br/>export_service.py]
     ES -->|Persist forced_review_requirements| SM[(ScanModel / SQLite)]
     SM -->|Read scan requirements| VS
     VS -->|errors / warnings| IS[ImportService<br/>import_service.py]
@@ -118,9 +118,10 @@ graph TD
 
 **核心设计原则**：
 
-1. **Mandatory Surface 判定**：
-   - Mandatory Surface 来自 `VendorPoolConfig` 规范注册（非全局关键词猜测）。
-   - **原子粒度 (Atomic Granularity)**：`PROGRAMS` 不是粗粒度遮蔽伞，而是细化为 `PROGRAM_STUDENT`、`PROGRAM_STARTUP`、`PROGRAM_RESEARCH`、`PROGRAM_DEVELOPER`、`PROGRAM_OPEN_SOURCE` 等独立原子项。
+1. **Vendor Pool 规范同步与原子粒度 (Vendor/Product Parity & Atomic Granularity)**：
+   - Mandatory Surface 来自 `VendorPoolConfig` 权威注册，覆盖全量 Tier 1 & 中国厂商（Qoder、Kimi、MiniMax、WorkBuddy、Coze、ByteDance、Alibaba、Tencent 等）。
+   - **废除粗粒度 `PROGRAMS` 遮蔽伞**：细化为 `PROGRAM_STUDENT`、`PROGRAM_STARTUP`、`PROGRAM_RESEARCH`、`PROGRAM_DEVELOPER`、`PROGRAM_OPEN_SOURCE`、`REFERRAL`、`CHECKIN`、`CREDITS` 等独立原子项。
+   - **地区独立产品隔离**：如 `HappyShrimp CN` 与 `HappyShrimp International`、`Model Studio CN` 与 `Model Studio International` 独立建档，严禁混淆。
    - `NOT_CHECKED` + mandatory → 必须 `SCAN_INCOMPLETE`，严禁 `PUBLIC_COMPLETE`。
    - `NOT_CHECKED` + optional → `NON_MANDATORY_NOT_CHECKED` 结构化警告，不阻断。
    - `NOT_CHECKED` + UNKNOWN → `COVERAGE_CRITICALITY_UNKNOWN` 警告，不假设也不阻断。
@@ -128,19 +129,21 @@ graph TD
 2. **BLIND_SPOT 语义**：
    - 针对控制台、桌面端或内部渠道（如 `HIDDEN_ACCOUNT`），若公开 Web 不可观测，标记为 `BLIND_SPOT`，允许 `PUBLIC_COMPLETE` + `OVERALL_PARTIAL` 成立。
 
-3. **Forced Early Review 闭环**：
-   - 信号源自 `ReviewPlanner`（从待复查线索、已废弃信源、争议福利等事实推导）。
-   - 信号随扫描批次持久化至 `ScanModel.forced_review_requirements`，进程重启/多 Worker 间完全一致。
-   - 必须精确匹配完整 Coverage Key (`vendor`, `product`, `surface`, `region`)。
-   - 存在强制提前复查要求时，即使未到 `next_review_at`，亦严禁使用 `REVIEW_NOT_DUE`。
+3. **Forced Early Review 精确映射与持久化**：
+   - 信号源自 `ReviewPlanner`（从待复查线索、已废弃信源、争议福利等推导），精准映射到真实 Surface（如签到线索对应 `CLIENT_REWARD`，邀请线索对应 `REFERRAL`，严禁一律 PRICING）。
+   - 信号提取真实 Region（如国内信源对应 `CN`），未知地区使用 `UNKNOWN`（严禁默认 `GLOBAL`；`UNKNOWN` 具备全地区 broad-scope 约束语义）。
+   - 信号持久化至 `ScanModel.forced_review_requirements`，进程重启/多 Worker 间完全一致。
+   - 必须精确匹配四元组 `(vendor, product, surface, region)`。命中信号时严禁使用 `REVIEW_NOT_DUE`。
 
-4. **Initial Baseline 语义 (CREATE ≠ NEW)**：
-   - 首次建立基线时，既有历史福利显式携带 `UNKNOWN` 保持 `UNKNOWN`；合法新推福利携带 `NEW` 保持 `NEW`。
-   - Desk 绝不静默篡改事实。
+4. **旧数据库 Migration 支持**：
+   - `migrate_db_schema()` 支持历史 SQLite 数据库无缝升级，自动幂等补全 `scans.forced_review_requirements` 字段，不破坏历史扫描数据。
+
+5. **Initial Baseline 语义 (CREATE ≠ NEW)**：
+   - 首次建立基线时，既有历史福利显式携带 `UNKNOWN` 保持 `UNKNOWN`；合法新推福利携带 `NEW` 保持 `NEW`。Desk 绝不静默篡改事实。
 
 ---
 
-## 🧪 自动化测试验证 (130 Tests — Protocol Regression & Lifecycle & Strict Compliance)
+## 🧪 自动化测试验证 (146 Tests — Protocol Regression & Lifecycle & Strict Compliance)
 
 - `TEST-001`: 首次 EMPTY Context 可以正常导出
 - `TEST-002`: CREATE Benefit 入库后生成永久 benefit_id
@@ -178,10 +181,12 @@ graph TD
 - `TEST-034`: Source ADD 必须提供 last_verified_at 时间戳 (缺失 → Validation FAIL)
 - `TEST-035`: 新建 Manual Check 必须使用 local_ref，严禁外部自定义永久 manual_check_id
 - `TEST-036 ~ TEST-059`: 增量 patch 合并校验、Lead 终态防护、Source Schema、amount 语义、Dedup 等
-- **Vendor Pool Canonical Coverage**: 覆盖 OpenAI、Anthropic、Google、Microsoft、GitHub、Qoder、Kimi、MiniMax、Mistral AI、Meta、ByteDance、Alibaba、Tencent、TRAE、Cursor、Windsurf、DeepSeek、xAI、Perplexity、Zhipu 等全矩阵
+- **Canonical Parity & High-Risk Surfaces**: Qoder (Credits/Discount/Events/Reset)、Kimi (Referral/Credits)、MiniMax (Migration)、WorkBuddy (Checkin/Reward)、Coze (Credits) 权威契约校验
 - **Program Atomicity Tests**: 单独满足 `PROGRAM_STUDENT` 不能视为完成其他必查 Program
+- **CN / International Separation**: 验证独立区域产品不被错误折叠
 - **BLIND_SPOT Semantics**: 验证控制台不可观测渠道合法支持 `PUBLIC_COMPLETE` + `OVERALL_PARTIAL`
-- **Planner-Driven Forced Review Tests**: 规划层产生信号 → `ScanModel` 持久化 → 校验层阻断 `REVIEW_NOT_DUE` → 重启/重载后持久生效
+- **Planner-Driven Forced Review Tests**: 真实映射至 `CLIENT_REWARD` / `REFERRAL` / `CN` / `UNKNOWN`，精确四元组拦截，无信号/跨区放行
+- **DB Migration Tests**: 验证历史扫描表新增 `forced_review_requirements` 幂等迁移及数据保全
 - **Initial Baseline NEW Semantics**: UNKNOWN 保持、合法 NEW 保留、CREATE ≠ NEW
 - **Warning Extensibility**: 已知类型 PASS、未知但合法类型 PASS、空类型 FAIL
 - **E2E Lifecycles**: 生命周期 A~E 全流程测试 PASS

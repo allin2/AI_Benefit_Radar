@@ -82,6 +82,82 @@ class ReviewPlanner:
     """Planner responsible for determining review requirements and forced review signals."""
 
     @staticmethod
+    def infer_lead_surface(lead: LeadModel) -> str:
+        """Infer the exact surface for an open lead based on summary / category."""
+        summary = (lead.lead_summary or "").lower()
+        if any(k in summary for k in ("checkin", "check-in", "签到", "打卡", "client reward", "reward", "任务")):
+            return "CLIENT_REWARD"
+        if any(k in summary for k in ("referral", "邀请", "推荐", "invite")):
+            return "REFERRAL"
+        if any(k in summary for k in ("model discount", "discount", "multiplier", "off-peak", "夜间", "折扣", "倍率", "降价", "economics")):
+            return "MODEL_ECONOMICS"
+        if any(k in summary for k in ("subscription", "pro", "plus", "tier", "会员", "订阅")):
+            return "SUBSCRIPTION"
+        if any(k in summary for k in ("student", "education", "高校", "学生")):
+            return "PROGRAM_STUDENT"
+        if any(k in summary for k in ("startup", "初创", "孵化")):
+            return "PROGRAM_STARTUP"
+        if any(k in summary for k in ("research", "science", "科研")):
+            return "PROGRAM_RESEARCH"
+        if any(k in summary for k in ("developer", "开发者")):
+            return "PROGRAM_DEVELOPER"
+        if any(k in summary for k in ("open source", "oss", "开源")):
+            return "PROGRAM_OPEN_SOURCE"
+        if any(k in summary for k in ("partner", "bundle", "合作")):
+            return "PARTNER_BUNDLE"
+        if any(k in summary for k in ("credit", "token", "grant", "额度", "体验金", "赠送")):
+            return "CREDITS"
+        if any(k in summary for k in ("migration", "迁移")):
+            return "MIGRATION"
+        if any(k in summary for k in ("api", "console", "控制台")):
+            return "BILLING_CONSOLE"
+        if any(k in summary for k in ("free signup", "注册", "免费注册")):
+            return "FREE_SIGNUP"
+        if any(k in summary for k in ("price", "pricing", "价格", "费率", "cut", "降费")):
+            return "PRICING"
+        return "UNKNOWN"
+
+    @staticmethod
+    def infer_benefit_surface(benefit: BenefitModel) -> str:
+        """Infer the exact surface for a disputed / likely benefit."""
+        b_type = (benefit.benefit_type or "").upper()
+        if b_type in ("CHECKIN", "CLIENT_REWARD"):
+            return "CLIENT_REWARD"
+        if b_type == "REFERRAL":
+            return "REFERRAL"
+        if b_type == "STUDENT_PROGRAM":
+            return "PROGRAM_STUDENT"
+        if b_type == "STARTUP_PROGRAM":
+            return "PROGRAM_STARTUP"
+        if b_type == "RESEARCHER_PROGRAM":
+            return "PROGRAM_RESEARCH"
+        if b_type == "DEVELOPER_PROGRAM":
+            return "PROGRAM_DEVELOPER"
+        if b_type == "OPEN_SOURCE_PROGRAM":
+            return "PROGRAM_OPEN_SOURCE"
+        if b_type in ("API_CREDITS", "WALLET_GRANT", "CREDITS"):
+            return "CREDITS"
+        if b_type in ("SUBSCRIPTION_UPGRADE", "SUBSCRIPTION"):
+            return "SUBSCRIPTION"
+        if b_type == "PARTNER_BUNDLE":
+            return "PARTNER_BUNDLE"
+        if b_type == "MODEL_DISCOUNT":
+            return "MODEL_ECONOMICS"
+        if b_type == "FREE_TIER":
+            return "FREE_SIGNUP"
+
+        text = f"{benefit.campaign_name} {benefit.benefit_detail}".lower()
+        if any(k in text for k in ("checkin", "check-in", "签到", "打卡")):
+            return "CLIENT_REWARD"
+        if any(k in text for k in ("referral", "邀请", "推荐", "invite")):
+            return "REFERRAL"
+        if any(k in text for k in ("discount", "multiplier", "倍率", "折扣")):
+            return "MODEL_ECONOMICS"
+        if any(k in text for k in ("price", "pricing", "费率", "价格")):
+            return "PRICING"
+        return "UNKNOWN"
+
+    @staticmethod
     def plan_forced_reviews(
         db: Session,
         scan_id: Optional[str] = None,
@@ -90,7 +166,7 @@ class ReviewPlanner:
         """Compute forced early review requirements for the scan.
 
         Triggers include:
-        1. Open Leads indicating major promotion/pricing changes
+        1. Open Leads indicating promotion/pricing/reward changes
         2. Deprecated sources requiring re-verification of the associated surface
         3. Benefits with DISPUTED or LIKELY status needing confirmation
 
@@ -100,11 +176,12 @@ class ReviewPlanner:
         requirements: List[Dict[str, str]] = []
         seen_keys = set()
 
-        # 1. Open Leads with promotional/pricing changes
+        # 1. Open Leads with promotional/pricing/reward changes
         leads = db.query(LeadModel).filter_by(status="OPEN").all()
         for lead in leads:
-            surface = "PRICING"
-            for region in lead.regions:
+            surface = ReviewPlanner.infer_lead_surface(lead)
+            regions = lead.regions if (lead.regions and len(lead.regions) > 0) else ["UNKNOWN"]
+            for region in regions:
                 key = (lead.vendor, lead.product, surface, region)
                 if key not in seen_keys:
                     seen_keys.add(key)
@@ -119,25 +196,38 @@ class ReviewPlanner:
         # 2. Canonical Sources with status DEPRECATED
         dep_sources = db.query(CanonicalSourceModel).filter_by(status="DEPRECATED").all()
         for s in dep_sources:
-            surface = s.surface
-            key = (s.vendor, s.product, surface, "GLOBAL")
+            surface = s.surface or "DOCS"
+            linked_cov = db.query(CoverageHistoryModel).filter_by(source_id=s.source_id).first()
+            if linked_cov and linked_cov.region and linked_cov.region != "UNKNOWN":
+                region = linked_cov.region
+            else:
+                combined = f"{s.vendor} {s.product} {s.source_name} {s.url}".upper()
+                if " CN" in combined or ".CN" in combined or "/CN" in combined or "国内" in combined or "中文" in combined:
+                    region = "CN"
+                elif " US" in combined or "/US" in combined:
+                    region = "US"
+                else:
+                    region = "UNKNOWN"
+
+            key = (s.vendor, s.product, surface, region)
             if key not in seen_keys:
                 seen_keys.add(key)
                 requirements.append({
                     "vendor": s.vendor,
                     "product": s.product,
                     "surface": surface,
-                    "region": "GLOBAL",
+                    "region": region,
                     "reason": f"Canonical source deprecated: {s.url} ({s.deprecation_reason or 'deprecated'})"
                 })
 
-        # 3. Disputed or expirable benefits
+        # 3. Disputed or likely benefits
         disputed = db.query(BenefitModel).filter(
             BenefitModel.verification_status.in_(["DISPUTED", "LIKELY"])
         ).all()
         for b in disputed:
-            surface = "PRICING"
-            for region in b.regions:
+            surface = ReviewPlanner.infer_benefit_surface(b)
+            regions = b.regions if (b.regions and len(b.regions) > 0) else ["UNKNOWN"]
+            for region in regions:
                 key = (b.vendor, b.product, surface, region)
                 if key not in seen_keys:
                     seen_keys.add(key)
@@ -169,3 +259,4 @@ class ReviewPlanner:
                     existing_keys.add(k)
             scan.forced_review_requirements = existing
             db.commit()
+

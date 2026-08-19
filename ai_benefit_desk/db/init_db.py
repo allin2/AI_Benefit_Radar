@@ -85,6 +85,14 @@ def migrate_db_schema(target_engine):
                 conn.execute(text("ALTER TABLE canonical_sources ADD COLUMN deprecation_reason TEXT"))
                 conn.commit()
 
+        # Check if forced_review_requirements exists in scans
+        res_scans = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='scans'")).fetchone()
+        if res_scans:
+            cols_scans = [c[1] for c in conn.execute(text("PRAGMA table_info(scans)")).fetchall()]
+            if "forced_review_requirements" not in cols_scans:
+                conn.execute(text("ALTER TABLE scans ADD COLUMN forced_review_requirements TEXT DEFAULT '[]'"))
+                conn.commit()
+
 
 def check_legacy_lead_compatibility(target_engine):
     """Check for legacy OPEN + CONFIRMED leads in the database and report compatibility warnings."""
