@@ -11,6 +11,7 @@ from ai_benefit_desk.schemas.protocol_models import (
     ScanImportPackage, BenefitChangeOperation, LeadChangeOperation, LeadRecord, CanonicalSourceItem, CoverageEventItem
 )
 from ai_benefit_desk.services.coverage_planner import CoveragePlanner
+from ai_benefit_desk.services.vendor_pool_config import VendorPoolConfig
 from ai_benefit_desk.utils.date_utils import is_review_due
 
 
@@ -217,6 +218,16 @@ class ValidationService:
                 # Condition 7: basis Coverage must have concrete next_review_at and must not be UNKNOWN / null
                 if not basis_cov.next_review_at or basis_cov.next_review_at == "UNKNOWN":
                     msg = f"REVIEW_NOT_DUE 缺少明确的 next_review_at，无法证明复查尚未到期。(Vendor: {cov.vendor}, Product: {cov.product}, Surface: {cov.surface})"
+                    result.add_error(msg)
+                    result.coverage_gate_failures.append({"vendor": cov.vendor, "product": cov.product, "surface": cov.surface, "reason": msg})
+                    continue
+
+                # Condition 7.6: No forced early review signal
+                force_reason = VendorPoolConfig.has_forced_review_signal(
+                    cov.vendor, cov.product, cov.surface, cov.region
+                )
+                if force_reason:
+                    msg = f"存在强制提前复查信号 ({force_reason})，禁止使用 REVIEW_NOT_DUE。(Vendor: {cov.vendor}, Product: {cov.product}, Surface: {cov.surface}, Region: {cov.region})"
                     result.add_error(msg)
                     result.coverage_gate_failures.append({"vendor": cov.vendor, "product": cov.product, "surface": cov.surface, "reason": msg})
                     continue

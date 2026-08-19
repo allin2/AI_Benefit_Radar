@@ -82,16 +82,20 @@ AI_Benefit_Randar/
 │   │   ├── dedup_service.py    # CREATE 疑似重复检测服务
 │   │   ├── review_service.py   # 到期复查与指标统计服务
 │   │   ├── export_service.py   # 上下文裁剪与导出服务
-│   │   └── import_service.py   # 导入编排、预览与事务写入
+│   │   ├── import_service.py   # 导入编排、预览与事务写入
+│   │   ├── coverage_planner.py # Coverage 规划服务 (委托 VendorPoolConfig)
+│   │   └── vendor_pool_config.py # Vendor Pool V1.2 运行时配置 (Source of Truth)
 │   └── utils/
 │       ├── enum_labels.py      # 英文内部枚举 -> 中文展示映射
 │       ├── date_utils.py       # 日期格式化与到期判定
 │       └── json_utils.py       # JSON 序列化工具
 ├── tests/
 │   ├── conftest.py             # 测试夹具 (内存 SQLite)
-│   ├── test_benefit_desk.py    # TEST-001 ~ TEST-043 全量单测
+│   ├── test_benefit_desk.py    # TEST-001 ~ TEST-059 全量单测
 │   ├── test_compliance.py      # Golden Fixture 与 Protocol 规约合规测试
-│   └── test_e2e_lifecycle.py   # 生命周期 A (初始基线) 与生命周期 B (常规全扫) 端到端测试
+│   ├── test_e2e_lifecycle.py   # 生命周期 A~E 端到端测试
+│   ├── test_final_compliance.py # Vendor-specific / Warning / Forced Review 最终合规测试
+│   └── test_protocol_strict_hardening.py # 严格 Discriminated Union 与 Coverage Gate 测试
 ├── data/
 │   └── benefit_desk.db         # 本地 SQLite 数据文件
 ├── README.md                   # 项目说明
@@ -100,7 +104,30 @@ AI_Benefit_Randar/
 
 ---
 
-## 🧪 自动化测试验证 (TEST-001 ~ TEST-059 Protocol Regression & Lifecycle Tests)
+## 🏗️ Coverage Architecture
+
+```mermaid
+graph LR
+    VP[Vendor Pool V1.2<br/>vendor_pool_config.py] --> CP[CoveragePlanner<br/>coverage_planner.py]
+    CP --> VS[ValidationService<br/>validation_service.py]
+    VP -->|forced_review_signals| VS
+    VS -->|errors / warnings| IS[ImportService<br/>import_service.py]
+```
+
+**数据流**：
+
+- **Mandatory Surface 判定**：`VendorPoolConfig` → `CoveragePlanner.is_mandatory_surface(vendor, product, surface)` → `ValidationService`
+- **Criticality 三态**：`MANDATORY` / `OPTIONAL` / `UNKNOWN`
+  - Vendor/Product 级别 mandatory surface 来自 Vendor Pool（非全局关键词猜测）
+  - `NOT_CHECKED` + mandatory → 必须 `SCAN_INCOMPLETE`，禁止 `PUBLIC_COMPLETE`
+  - `NOT_CHECKED` + optional → `NON_MANDATORY_NOT_CHECKED` 警告，不阻断
+  - `NOT_CHECKED` + UNKNOWN → `COVERAGE_CRITICALITY_UNKNOWN` 警告，不阻断也不假设
+- **BLIND_SPOT 语义**：Hidden Account 等控制台渠道公开不可观察时标为 `BLIND_SPOT`，允许 `PUBLIC_COMPLETE` + `OVERALL_PARTIAL`
+- **Forced Early Review**：即使 `next_review_at` 未到期，若存在强制提前复查信号，`REVIEW_NOT_DUE` 仍被拒绝
+
+---
+
+## 🧪 自动化测试验证 (126 Tests — Protocol Regression & Lifecycle & Strict Compliance)
 
 - `TEST-001`: 首次 EMPTY Context 可以正常导出
 - `TEST-002`: CREATE Benefit 入库后生成永久 benefit_id
@@ -117,7 +144,7 @@ AI_Benefit_Randar/
 - `TEST-013`: Scan Import 绝不修改用户个人操作状态 (`CLAIMED`)
 - `TEST-014`: CREATE 疑似重复 → 进入预览，不自动创建
 - `TEST-015`: 事务中途失败 → 整体原子 rollback
-- `TEST-016`: 首次 Baseline 的长期既有福利不会被自动标 NEW
+- `TEST-016`: 首次 Baseline 合法 NEW 保留为 NEW (不自动篡改为 UNKNOWN，CREATE ≠ NEW)
 - `TEST-017`: 用户所有可见主要状态显示中文
 - `TEST-018`: 未导出的未知 scan_id → FAIL
 - `TEST-019`: EMPTY Baseline 要求 BUILD_INITIAL_BASELINE
@@ -125,7 +152,7 @@ AI_Benefit_Randar/
 - `TEST-021`: 非法 package_type 被严格拒绝
 - `TEST-022`: 非法 Protocol 枚举值 Schema 级别阻断
 - `TEST-023`: Protocol 事件时间强制要求带时区 ISO8601
-- `TEST-024`: 存在 NOT_CHECKED 必然要求包含 SCAN_INCOMPLETE 且禁止 PUBLIC_COMPLETE
+- `TEST-024`: Vendor Pool mandatory surface 为 NOT_CHECKED 时要求 SCAN_INCOMPLETE 且禁止 PUBLIC_COMPLETE
 - `TEST-025`: Scan Context 导出包含完整 benefit_index 身份字段
 - `TEST-026`: Vendor Deep Dive 正确裁剪 User Benefit State
 - `TEST-027`: 同一 Import 内 local_ref 全局唯一性校验 (跨类型)
@@ -135,35 +162,14 @@ AI_Benefit_Randar/
 - `TEST-031`: 初始基线全生命周期测试 (EMPTY -> Export -> Import -> READY -> rev+1 -> 幂等阻断)
 - `TEST-032`: REVIEW_NOT_DUE 必须依赖明确 next_review_at (null / UNKNOWN 阻断，严格未来日期通过且不刷新 actual_checked_at)
 - `TEST-033`: NOT_CHECKED 与 BLIND_SPOT 正确持久化 NULL actual_checked_at 且 CHECKED_NONE 缺 actual_checked_at 阻断
-- `TEST-034`: Source ADD 缺失 last_verified_at 时自动填充 timezone-aware ISO8601 且二次导出校验通过
+- `TEST-034`: Source ADD 必须提供 last_verified_at 时间戳 (缺失 → Validation FAIL)
 - `TEST-035`: 新建 Manual Check 必须使用 local_ref，严禁外部自定义永久 manual_check_id
-- `TEST-036`: Benefit UPDATE 增量 patch 与既有记录合并完整校验 (禁止伪造/外来字段，非法枚举/格式阻断)
-- `TEST-037`: Lead UPDATE 增量合并校验 (严禁篡改 lead_id 与外来字段，合法更新通过)
-- `TEST-038`: Canonical Source UPDATE 增量合并校验 (严禁非法 source_level 与非时区时间戳)
-- `TEST-039`: Lead 严禁以 CONFIRMED 长期存在 (必须使用 RESOLVE_TO_BENEFIT 转为正规福利)
-- `TEST-044`: CREATE duplicate resolution UPDATE_EXISTING 真实合并入库 (事实更新/保留 first_seen / 保护 User Benefit State / local_ref 映射)
-- `TEST-045`: Dedup UNKNOWN-safe 合并防护 (UNKNOWN 不覆盖已有明确事实，显式新值安全更新)
-- `TEST-046`: Dedup 目标为 CONFIRMED 时的 Evidence Gate 严格防护
-- `TEST-047`: Initial Baseline / Scan Import 内候选福利之间 (Intra-Package) 查重与合并 (MERGE_LOCAL)
-- `TEST-048`: Package 内部查重合并后 local_ref 交叉引用映射 (Lead 转福利精准解析)
-- `TEST-049`: Package 内部候选福利显式冲突事实检测与结构化告警
-- `TEST-050`: 历史 OPEN + CONFIRMED Lead 数据库兼容性检查与 Context 导出安全跳过
-- `TEST-051`: Benefit UPDATE Schema 完整性防御与非受控字段拦截
-- `TEST-052`: Benefit UPDATE 字符串规范化清洗与自动推断
-- `TEST-053`: Lead 严禁外部新增或更新为 CONFIRMED 终态
-- `TEST-054`: Lead UPDATE Schema 严格校验与合法更新
-- `TEST-055`: Canonical Source UPDATE Schema 与时区完整性防御
-- `TEST-056`: amount 语义解析 (数值清洗与 UNKNOWN 保持)
-- `TEST-057`: 显式冲突重复福利必须显式解决方可提交
-- `TEST-058`: Scan Context 规范信封结构与 Canonical Envelope 对齐
-- `TEST-059`: 遗留不兼容数据兼容性扫描与结构化告警服务
-- `E2E Lifecycles`:
-  - `LIFECYCLE A`: 初始基线全生命周期 (EMPTY -> Export -> DEEP_FULL_SCAN -> READY -> rev=1 -> 二次导入幂等阻断)
-  - `LIFECYCLE B`: 正常基线增量更新周期 (READY -> Export -> FULL_SCAN -> UPDATE 覆盖/线索/福利 -> rev=2 -> 5项负向门禁拦截)
-  - `LIFECYCLE C`: 查重处理生命周期 (READY -> Export -> CREATE 匹配已有福利 -> Preview 查重 -> 用户选择 UPDATE -> 真实合并更新 -> 保持 ID 与用户状态 -> rev+1)
-  - `LIFECYCLE D`: 初始基线 Package 内查重生命周期 (EMPTY -> Export -> DEEP_FULL_SCAN 2条同活动候选 -> Preview 识别 -> MERGE_LOCAL -> 单一福利入库 -> 映射同永久 ID -> READY)
-  - `LIFECYCLE E`: 校验完整性全生命周期 (门禁严格拦截 -> 冲突解决 -> 正常入库校验)
-
-
+- `TEST-036 ~ TEST-059`: 增量 patch 合并校验、Lead 终态防护、Source Schema、amount 语义、Dedup 等
+- **Vendor-Specific Coverage Tests**: OpenAI REFERRAL/PARTNER_BUNDLE mandatory、optional surface 不阻断、UNKNOWN criticality 警告、BLIND_SPOT 合法
+- **Initial Baseline NEW Semantics**: UNKNOWN 保持、合法 NEW 保留、CREATE ≠ NEW
+- **Warning Extensibility**: 已知类型 PASS、未知但合法类型 PASS、空类型 FAIL
+- **Forced Review Signal**: 无信号 REVIEW_NOT_DUE PASS、有信号 FAIL、信号必须匹配完整 Coverage Key
+- **E2E Lifecycles**: 初始基线 → 增量更新 → 查重处理 → Package 内查重 → 校验完整性
+- **Real Fixture E2E**: `AI-Benefit-Scan-Import-SCAN-20260818-001.json` (112 Benefits + 9 Leads + 92 Sources + 340 Coverage + 11 Manual Checks)
 
 

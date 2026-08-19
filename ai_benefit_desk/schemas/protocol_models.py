@@ -8,7 +8,7 @@ from ai_benefit_desk.utils.date_utils import is_valid_date_or_unknown, is_valid_
 # ==========================================
 VALID_SOURCE_LEVELS = {"S", "A", "B", "C"}
 VALID_SOURCE_ROLES = {"PRIMARY", "SUPPORTING", "LEAD"}
-VALID_WARNING_TYPES = {
+RECOMMENDED_WARNING_TYPES = {
     "REGION_UNCERTAIN",
     "EVIDENCE_MISMATCH",
     "POSSIBLE_DUPLICATE",
@@ -121,10 +121,9 @@ class WarningItem(BaseModel):
     @field_validator("type")
     @classmethod
     def validate_warning_type(cls, v: str) -> str:
-        val = v.upper()
-        if val not in VALID_WARNING_TYPES:
-            raise ValueError(f"Invalid warning type: {val}")
-        return val
+        if not v or not v.strip():
+            raise ValueError("Warning type 不能为空")
+        return v.strip().upper()
 
 # ==========================================
 # 3. Base Record Models for Context & Import

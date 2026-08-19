@@ -334,9 +334,9 @@ def test_compliance_016_not_checked_public_complete_fails(db_session):
     data = loads_json(raw)
     data["coverage_events"].append({
         "vendor": "OpenAI",
-        "product": "API",
+        "product": "OpenAI API",
         "wallet": "UNKNOWN",
-        "surface": "API Credits",
+        "surface": "MODEL_ECONOMICS",
         "region": "GLOBAL",
         "coverage_state": "NOT_CHECKED",
         "scan_observed_at": "2026-08-18T18:00:00+08:00",
@@ -593,7 +593,7 @@ def test_compliance_026_initial_baseline_change_type(db_session):
     ImportService.commit_import(db_session, p["import_pkg"], raw_json)
 
     b = db_session.query(BenefitModel).filter_by(vendor="OpenAI").first()
-    assert b.change_type == "UNKNOWN"
+    assert b.change_type == "NEW"
 
 # COMPLIANCE-027: Unknown Benefit fact 使用 "UNKNOWN", 新对象永久 ID 使用 null
 def test_compliance_027_unknown_fact_vs_null_id(db_session):

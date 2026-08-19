@@ -326,8 +326,6 @@ class ImportService:
                 elif bop.operation == "CREATE":
                     rec = bop.record
                     effective_change_type = rec.change_type
-                    if is_initial_baseline and rec.change_type == "NEW":
-                        effective_change_type = "UNKNOWN"
 
                     perm_id = local_ref_to_id[bop.local_ref]
                     b_model = BenefitModel(

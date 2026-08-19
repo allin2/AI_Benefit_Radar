@@ -731,7 +731,7 @@ def test_coverage_mandatory_surfaces_completion_gate(db_session):
     pkg_a["scan_result"]["scan_statuses"] = ["PUBLIC_COMPLETE"]
     pkg_a["coverage_events"] = [{
         "vendor": "Anthropic",
-        "product": "Claude API",
+        "product": "Anthropic API",
         "surface": "MODEL_ECONOMICS",
         "region": "GLOBAL",
         "coverage_state": "NOT_CHECKED",

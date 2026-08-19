@@ -589,7 +589,7 @@ def test_016_initial_baseline_change_type(db_session):
     ImportService.commit_import(db_session, preview["import_pkg"], raw_json)
 
     b = db_session.query(BenefitModel).filter_by(vendor="Zhipu").first()
-    assert b.change_type == "UNKNOWN"
+    assert b.change_type == "NEW"
 
 # TEST-017: 中文枚举映射完整性
 def test_017_chinese_status_labels():
